@@ -3,6 +3,7 @@ import St from "gi://St";
 import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import Gio from "gi://Gio";
+import Pango from "gi://Pango";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
 import { INFO_TIPS } from "./constants.js";
@@ -41,9 +42,14 @@ const SpotifyIndicator = GObject.registerClass(
         text: "Spotify",
         y_align: Clutter.ActorAlign.CENTER,
       });
+      this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+      this._label.clutter_text.line_wrap = false;
       this.add_child(this._label);
       this.menu.box.add_child(this._ui.container);
       this.menu.connect("open-state-changed", (_menu, isOpen) => {
+        // The popup follows this indicator's allocation. Hold its label width
+        // while open so track/volume updates cannot move the menu under the pointer.
+        this._label.set_width(isOpen ? this._label.width : -1);
         if (isOpen) this._extension.showQuickTips();
       });
 
