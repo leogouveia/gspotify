@@ -2,6 +2,7 @@ import Adw from "gi://Adw";
 import Gio from "gi://Gio";
 import Gtk from "gi://Gtk";
 import GLib from "gi://GLib";
+import { findSpotDL } from "../spotdl-path.js";
 
 import {
   createOpenURLButton,
@@ -387,28 +388,37 @@ export function buildGeneralPage(window, settings, metadata) {
     "https://github.com/spotDL/spotify-downloader",
   );
   spotDLRow.connect("activated", () => {
+    const executable = findSpotDL();
+    if (!executable) {
+      spotDLRow.subtitle = "SpotDL not found — open its website to install";
+      window.add_toast(new Adw.Toast({ title: "SpotDL executable not found" }));
+      if (!openSpotDLsiteButton.get_parent()) spotDLRow.add_suffix(openSpotDLsiteButton);
+      return;
+    }
+    spotDLRow.activatable = false;
     try {
-      const [success, stdout, stderr, status] =
-        GLib.spawn_command_line_sync("spotdl --version");
-      if (success && status === 0 && stdout.length > 0) {
-        const spotdlVersion = new TextDecoder().decode(stdout).trim();
-        spotDLRow.subtitle = `Found SpotDL v${spotdlVersion}`;
-
-        const dialog = new Adw.Toast({
-          title: `Found SpotDL v${spotdlVersion}`,
-        });
-        window.add_toast(dialog);
-      }
-    } catch {
-      spotDLRow.subtitle =
-        "SpotDL not found - Open spotdl's site for installation";
-
-      const dialog = new Adw.Toast({
-        title: "SpotDL not found - Open spotdl's site for installation",
+      const proc = Gio.Subprocess.new([executable, "--version"],
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+      proc.communicate_utf8_async(null, null, (process, result) => {
+        try {
+          const [success, stdout, stderr] = process.communicate_utf8_finish(result);
+          if (!success || !process.get_successful() || !stdout.trim()) {
+            throw new Error(stderr.trim() || "SpotDL version check failed");
+          }
+          spotDLRow.subtitle = `SpotDL ${stdout.trim()} · ${executable}`;
+          if (openSpotDLsiteButton.get_parent()) spotDLRow.remove(openSpotDLsiteButton);
+          window.add_toast(new Adw.Toast({ title: `Found SpotDL ${stdout.trim()}` }));
+        } catch (e) {
+          spotDLRow.subtitle = `${executable}: ${e.message}`;
+          window.add_toast(new Adw.Toast({ title: "SpotDL check failed" }));
+        } finally {
+          spotDLRow.activatable = true;
+        }
       });
-      window.add_toast(dialog);
-
-      spotDLRow.add_suffix(openSpotDLsiteButton);
+    } catch (e) {
+      spotDLRow.activatable = true;
+      spotDLRow.subtitle = `${executable}: ${e.message}`;
+      window.add_toast(new Adw.Toast({ title: "SpotDL check failed" }));
     }
   });
   downloadsGroup.add(spotDLRow);

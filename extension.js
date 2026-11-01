@@ -14,7 +14,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import { SpotifyDBus } from "./dbus-parser.js";
 import { SpotifyUI } from "./spotui.js";
 import { SpotDLExecutor } from "./spotdl.js";
-import { getStatusSymbol, toggleSpotifyWindow } from "./utils.js";
+import { toggleSpotifyWindow } from "./utils.js";
 import { logInfo, logWarn, logError } from "./utils.js";
 import { destroyStatsManager } from "./stats.js";
 import { cleanupSpotify, isSpotifyLoggedIn } from "./spotify-helper.js";
@@ -518,60 +518,44 @@ export default class SpotifyExtension extends Extension {
   }
 
   downloadTrack() {
-    const metadata = this._indicator._dbus.getMetadata();
-    const displayText =
-      metadata.title.length > 40
-        ? metadata.title.substring(0, 37) + "..."
-        : metadata.title;
-    this._indicator._label.text = `${displayText} ⦿`;
-    this._indicator._spotdl.checkSpotDLInstalled((installed) => {
-      if (!installed) {
-        logInfo("SpotDL is not installed");
-        this.sendOSDMessage("SpotDL is not installed", "dialog-error-symbolic");
-        this._indicator._label.text = "SpotDL is not installed";
-        return;
-      }
-    });
-
-    const rawFolder = this._settings.get_string("download-folder");
-    let output_folder;
-
-    if (GLib.path_is_absolute(rawFolder)) {
-      output_folder = rawFolder;
-    } else if (rawFolder.startsWith("~/")) {
-      output_folder = GLib.build_filenamev([
-        GLib.get_home_dir(),
-        rawFolder.slice(2),
-      ]);
-    } else {
-      output_folder = GLib.build_filenamev([GLib.get_home_dir(), rawFolder]);
+    if (this._downloadInProgress) return;
+    const executor = this._indicator?._spotdl;
+    const metadata = this._indicator?._dbus?.getMetadata();
+    if (!executor || !metadata?.url) {
+      this.sendNotification("Unable to download", "No track is available to download.",
+        "dialog-warning-symbolic");
+      return;
+    }
+    if (!executor.executablePath) {
+      this.sendNotification("SpotDL not found",
+        "Install SpotDL or check its executable location in preferences.",
+        "dialog-error-symbolic");
+      return;
     }
 
-    this._indicator._spotdl.downloadSong(
-      {
-        url: metadata.url,
-        output: output_folder,
-      },
-      (output) => {
-        this._indicator._label.text = `${displayText} ${getStatusSymbol(output.message)}`;
-      },
+    const rawFolder = this._settings.get_string("download-folder");
+    const output = GLib.path_is_absolute(rawFolder)
+      ? rawFolder
+      : GLib.build_filenamev([GLib.get_home_dir(),
+        rawFolder.startsWith("~/") ? rawFolder.slice(2) : rawFolder]);
+    const title = metadata.title || "Spotify track";
+    this._downloadInProgress = true;
+    this.sendNotification("Download started", title, "folder-download-symbolic");
+    executor.downloadSong({ url: metadata.url, output },
+      (line) => logInfo(`SpotDL ${line.type}: ${line.message}`),
       (result) => {
+        this._downloadInProgress = false;
+        if (!this._settings) return; // The extension may have been disabled.
         if (result.success) {
-          this._indicator._label.text = `${displayText} ✓`;
-          this.sendOSDMessage(
-            "Track downloaded successfully",
-            "dialog-information-symbolic",
-          );
+          this.sendNotification("Download complete", `${title}\nSaved to ${output}`,
+            "folder-download-symbolic");
         } else {
-          logWarn(`Download failed: ${result.error || result.exitCode}`);
-          this.sendOSDMessage(
-            "Download failed, Check SpotDL logs for details",
-            "dialog-warning-symbolic",
-          );
-          this._indicator._label.text = `${displayText} ✕`;
+          const reason = result.error || `SpotDL exited with code ${result.exitCode}`;
+          logWarn(`Download failed: ${reason}`);
+          this.sendNotification("Download failed", `${title}\n${reason}`,
+            "dialog-warning-symbolic");
         }
-      },
-    );
+      });
   }
 
   scheduleSpotifyMinimize() {
