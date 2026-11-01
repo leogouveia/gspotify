@@ -50,9 +50,9 @@ export function buildGeneralPage(window, settings, metadata) {
     Gio.SettingsBindFlags.DEFAULT,
   );
   const showInfoTipRow = new Adw.SwitchRow({
-    title: "Show Info Tip",
+    title: "Show Quick Tips Once",
     subtitle:
-      "Show a tip explaining different control behavior when the extension is enabled",
+      "Send a notification the next time you open the player; turns off automatically",
   });
   settings.bind(
     "show-info-tip",

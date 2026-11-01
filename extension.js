@@ -4,6 +4,8 @@ import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import Gio from "gi://Gio";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
+import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
+import { INFO_TIPS } from "./constants.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as Config from "resource:///org/gnome/shell/misc/config.js";
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
@@ -41,6 +43,9 @@ const SpotifyIndicator = GObject.registerClass(
       });
       this.add_child(this._label);
       this.menu.box.add_child(this._ui.container);
+      this.menu.connect("open-state-changed", (_menu, isOpen) => {
+        if (isOpen) this._extension.showQuickTips();
+      });
 
       this._dbus = new SpotifyDBus(this);
 
@@ -295,6 +300,8 @@ export default class SpotifyExtension extends Extension {
 
   disable() {
     this._clearMinimizeTimeout();
+    this._notificationSource?.destroy();
+    this._notificationSource = null;
 
     if (this._settingsHandlerId) {
       this._settings.disconnect(this._settingsHandlerId);
@@ -574,6 +581,34 @@ export default class SpotifyExtension extends Extension {
       }
       return GLib.SOURCE_CONTINUE;
     });
+  }
+
+  sendNotification(title, body, iconName = "multimedia-player-symbolic", action = null) {
+    if (!this._settings) return null;
+    if (!this._notificationSource) {
+      this._notificationSource = new MessageTray.Source({
+        title: "GSpotify",
+        iconName: "multimedia-player-symbolic",
+      });
+      this._notificationSource.connect("destroy", () => {
+        this._notificationSource = null;
+      });
+      Main.messageTray.add(this._notificationSource);
+    }
+    const notification = new MessageTray.Notification({
+      source: this._notificationSource, title, body, gicon: new Gio.ThemedIcon({ name: iconName }),
+    });
+    if (action) notification.addAction(action.label, action.callback);
+    this._notificationSource.addNotification(notification);
+    return notification;
+  }
+
+  showQuickTips() {
+    if (!this._settings.get_boolean("show-info-tip")) return;
+    this.sendNotification("GSpotify — quick tips", INFO_TIPS.join("\n"),
+      "multimedia-player-symbolic",
+      { label: "Open preferences", callback: () => this.openPreferences() });
+    this._settings.set_boolean("show-info-tip", false);
   }
 
   sendOSDMessage(message, iconName) {
