@@ -1,25 +1,76 @@
 .spotify-card {
-  border-radius: 10px;
+  border-radius: 24px;
+  padding: 18px;
+  color: white;
+  background-color: #292638;
+  background-gradient-direction: vertical;
+  background-gradient-start: #39334f;
+  background-gradient-end: #211e2e;
+}
+
+.spotify-header {
+  spacing: 18px;
 }
 
 .spotify-info-box {
-  margin-left: 2px;
-  margin-right: 2px;
+  spacing: 6px;
 }
 
 .spotify-artwork {
-  border-radius: 10px;
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.08);
   background-size: cover;
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.22);
+}
+
+.spotify-source {
+  font-size: 10px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .spotify-title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: bold;
 }
 
+.spotify-artist {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.spotify-playback-controls {
+  margin-top: 16px;
+  margin-bottom: 10px;
+  spacing: 20px;
+}
+
+.spotify-progress-bar {
+  height: 14px;
+}
+
+.spotify-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.spotify-progress-filled {
+  background-color: white;
+  border-radius: 2px;
+}
+
+.spotify-progress-times {
+  margin-top: 3px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
 .spotify-button {
+  width: 40px;
+  height: 40px;
   border-radius: 20px;
-  padding: 10px;
+  padding: 0;
   background-color: transparent;
   transition:
     background-color 150ms ease,
@@ -35,8 +86,10 @@
 }
 
 .spotify-button-secondary {
-  border-radius: 20px;
-  padding: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  padding: 0;
 
   background-color: rgba(255, 255, 255, 0.1);
   transition:
@@ -53,8 +106,10 @@
 }
 
 .spotify-close-button {
-  border-radius: 20px;
-  padding: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  padding: 0;
 
   background-color: rgba(255, 255, 255, 0.1);
   transition:
@@ -70,21 +125,30 @@
   background-color: rgba(255, 0, 0, 0.3);
 }
 
-.spotify-info-tip {
-  color: white;
-  background-color: rgba(0, 0, 0, 0.7);
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-size: 10px;
-}
-
 .spotify-additional-controls {
-  margin-top: 8px;
+  margin-top: 12px;
   spacing: 8px;
 }
 
 .spotify-separator {
   background-color: rgba(255, 255, 255, 0.1);
   height: 1px;
-  margin-top: 8px;
+  margin-top: 12px;
+}
+
+.spotify-play-button {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 24px;
+  color: #242130;
+  background-color: white;
+}
+
+.spotify-play-button:hover {
+  background-color: #e6e2f1;
+}
+
+.spotify-play-button:active {
+  background-color: #ccc5dd;
 }

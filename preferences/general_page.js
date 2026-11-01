@@ -105,8 +105,8 @@ export function buildGeneralPage(window, settings, metadata) {
     Gio.SettingsBindFlags.DEFAULT,
   );
   const useFixedWidthRow = new Adw.SwitchRow({
-    title: "Use Fixed Width",
-    subtitle: "Enable fixed width for the UI panel",
+    title: "Use Custom Width",
+    subtitle: "Use a custom card width instead of the standard 360 pixels",
   });
   settings.bind(
     "use-fixed-width",
@@ -116,9 +116,9 @@ export function buildGeneralPage(window, settings, metadata) {
   );
   const widthRow = new Adw.SpinRow({
     title: "UI Width",
-    subtitle: "Fixed width in pixels (250-600)",
+    subtitle: "Card width in pixels (320-600)",
     adjustment: new Gtk.Adjustment({
-      lower: 250,
+      lower: 320,
       upper: 600,
       step_increment: 10,
       page_increment: 50,
