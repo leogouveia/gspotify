@@ -4,10 +4,22 @@ import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import GdkPixbuf from "gi://GdkPixbuf";
 import Pango from "gi://Pango";
+import Soup from "gi://Soup";
 
 import { toggleSpotifyWindow, logWarn, logInfo } from "./utils.js";
 import { toggleLike, isTrackLiked } from "./spotify-helper.js";
 import { getValidAccessToken } from "./spotify-auth.js";
+
+// Look of the blurred album-art card background (easy to tweak):
+const BLUR_SIZE = 128; // source resolution before blurring (bigger = smoother)
+const BLUR_RADIUS = 6; // box-blur radius; several passes approximate gaussian
+const BLUR_PASSES = 3;
+const COLOR_SATURATION = 1.3; // > 1 keeps album colors strong instead of pastel
+const BACKGROUND_BRIGHTNESS_TOP = 0.95; // mild baked ramp; most of the
+const BACKGROUND_BRIGHTNESS_BOTTOM = 0.85; // darkening comes from the scrim
+const SCRIM_ALPHA_TOP = 0.15; // transparent→dark gradient painted OVER the
+const SCRIM_ALPHA_BOTTOM = 0.4; // cover so white text stays readable
+const MENU_TINT_FACTOR = 0.38; // dominant-color tint of the popup around card
 
 export class SpotifyUI {
   constructor(indicator, extension, onColorUpdate = null) {
@@ -18,6 +30,15 @@ export class SpotifyUI {
     this._currentColors = null;
     this._readableTextColor = null;
     this._currentArtworkUrl = null;
+    this._bgFile = null;
+    this._bgSequence = 0;
+
+    // Remote artwork (new Spotify clients expose mpris:artUrl as https://
+    // CDN links) is fetched with libsoup instead of Gio/gvfs, which is not
+    // reliable from inside the gnome-shell process.
+    this._artworkSession = new Soup.Session();
+    this._artworkSession.timeout = 15;
+    this._artworkSession.user_agent = "gnome-shell-gspotify";
     this._isPlaying = false;
     this._progressTimeout = null;
     this._lastUpdateTime = null;
@@ -144,10 +165,12 @@ export class SpotifyUI {
       track_hover: true,
     });
 
-    this._infoBox.add_child(new St.Label({
-      style_class: "spotify-source",
-      text: "SPOTIFY",
-    }));
+    this._infoBox.add_child(
+      new St.Label({
+        style_class: "spotify-source",
+        text: "SPOTIFY",
+      }),
+    );
     this._titleLabel = new St.Label({
       style_class: "spotify-title",
       text: "No track playing",
@@ -216,7 +239,9 @@ export class SpotifyUI {
       reactive: true,
     });
 
-    this._progressTrack = new St.Widget({ style_class: "spotify-progress-track" });
+    this._progressTrack = new St.Widget({
+      style_class: "spotify-progress-track",
+    });
     this._progressTrack.set_position(0, 5);
     this._progressBarContainer.add_child(this._progressTrack);
     this._progressFilled = new St.Widget({
@@ -303,7 +328,8 @@ export class SpotifyUI {
     this._progressBox.add_child(times);
     this.container.add_child(this._progressBox);
     this._progressWidthChangedId = this._progressBarContainer.connect(
-      "notify::width", () => this._updateProgressBar(),
+      "notify::width",
+      () => this._updateProgressBar(),
     );
   }
 
@@ -588,9 +614,11 @@ export class SpotifyUI {
   async update(metadata) {
     if (!metadata?.success) return;
 
-    await this._checkSpotifyConnection();
     this._currentMetadata = metadata;
 
+    // Render the card first so track data, progress and artwork appear
+    // immediately. Account status only affects the like button and is
+    // refreshed (off the critical path) on track changes below.
     this._updateText(metadata);
     this._updateProgress(metadata);
     this._updatePlayState(metadata);
@@ -604,14 +632,18 @@ export class SpotifyUI {
         metadata.trackId || "/org/mpris/MediaPlayer2/TrackList/NoTrack";
       if (trackId && trackId !== this._currentTrackId) {
         this._currentTrackId = trackId;
-        await this._checkLikeStatus();
-        this._updateLikeButtonIcon();
+        await this._refreshLikeState();
       }
     } else {
       this._currentTrackId = null;
       this._isLiked = false;
       this._updateLikeButtonIcon();
     }
+  }
+
+  async _refreshLikeState() {
+    await this._checkSpotifyConnection();
+    await this._checkLikeStatus();
   }
 
   async _checkLikeStatus() {
@@ -687,7 +719,10 @@ export class SpotifyUI {
   }
 
   _updateProgressBar() {
-    const position = Math.max(0, Math.min(this._currentPosition, this._duration));
+    const position = Math.max(
+      0,
+      Math.min(this._currentPosition, this._duration),
+    );
     const progress = this._duration > 0 ? position / this._duration : 0;
     const barWidth = this._progressBarContainer.width;
     const filledWidth = Math.floor(progress * barWidth);
@@ -754,6 +789,7 @@ export class SpotifyUI {
       this._loadArtwork(metadata.artworkUrl);
     } else if (!metadata.artworkUrl) {
       this._artwork.style = "border-radius: 10px; background-color: #333333;";
+      if (this._bgFile) this._clearCardBackground();
     }
   }
 
@@ -785,17 +821,35 @@ export class SpotifyUI {
   }
 
   _loadArtworkFromUrl(url) {
-    const file = Gio.File.new_for_uri(url);
-    file.load_contents_async(null, (src, res) => {
-      try {
-        const [success, bytes] = src.load_contents_finish(res);
-        if (!success) throw new Error("Failed to load contents from URL");
-        this._setArtworkFromBytes(bytes);
-      } catch (e) {
-        logWarn("Failed to load artwork from URL");
-        this._setFallbackArtwork();
-      }
-    });
+    try {
+      const msg = Soup.Message.new("GET", url);
+      this._artworkSession.send_and_read_async(
+        msg,
+        GLib.PRIORITY_DEFAULT,
+        null,
+        (_session, result) => {
+          if (this._destroyed) return;
+          try {
+            const bytes = this._artworkSession.send_and_read_finish(result);
+            const status = msg.get_status();
+            if (status < 200 || status >= 300)
+              throw new Error(`HTTP ${status}`);
+
+            const data = bytes.get_data();
+            if (!data || data.length === 0)
+              throw new Error("Empty response body");
+
+            this._setArtworkFromBytes(data);
+          } catch (e) {
+            logWarn("Failed to load artwork from URL:", e.message || e, url);
+            this._setFallbackArtwork();
+          }
+        },
+      );
+    } catch (e) {
+      logWarn("Failed to start artwork download:", e.message || e);
+      this._setFallbackArtwork();
+    }
   }
 
   _setArtworkFromBytes(bytes) {
@@ -823,6 +877,7 @@ export class SpotifyUI {
             colorData.main,
             colorData.accent,
             colorData.theme,
+            colorData.backgroundUri,
           );
         }
       }
@@ -834,6 +889,7 @@ export class SpotifyUI {
 
   _setFallbackArtwork() {
     this._artwork.style = "border-radius: 10px; background-color: #333333;";
+    this._clearCardBackground();
   }
 
   _getColorPaletteFromBytes(bytes) {
@@ -843,8 +899,8 @@ export class SpotifyUI {
       );
       const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
         stream,
-        16,
-        16,
+        BLUR_SIZE,
+        BLUR_SIZE,
         true,
         null,
       );
@@ -853,6 +909,7 @@ export class SpotifyUI {
 
       const pixels = pixbuf.get_pixels();
       const hasAlpha = pixbuf.get_has_alpha();
+      const channels = pixbuf.get_n_channels();
       const rowstride = pixbuf.get_rowstride();
       const width = pixbuf.get_width();
       const height = pixbuf.get_height();
@@ -864,7 +921,7 @@ export class SpotifyUI {
 
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const offset = y * rowstride + x * (hasAlpha ? 4 : 3);
+          const offset = y * rowstride + x * channels;
           r += pixels[offset];
           g += pixels[offset + 1];
           b += pixels[offset + 2];
@@ -885,12 +942,153 @@ export class SpotifyUI {
           main: mainColor,
           accent: accentColor,
           theme: this._getThemeColor(mainColor, accentColor),
+          backgroundUri: this._createBlurredBackground(pixbuf),
         };
       }
     } catch (e) {
       logWarn("Failed to get color palette");
     }
     return null;
+  }
+
+  // Separable box blur over a packed RGB/RGBA buffer: one horizontal pass
+  // into dst plus one vertical pass back into src. _createBlurredBackground
+  // ping-pongs the two buffers BLUR_PASSES times to approximate a gaussian.
+  _boxBlurPass(src, dst, width, height, channels, radius, horizontal) {
+    const windowSize = radius * 2 + 1;
+    const outer = horizontal ? height : width;
+    const inner = horizontal ? width : height;
+    const strideOuter = horizontal ? width * channels : channels;
+    const strideInner = horizontal ? channels : width * channels;
+
+    for (let o = 0; o < outer; o++) {
+      const base = o * strideOuter;
+      for (let c = 0; c < channels; c++) {
+        let sum = 0;
+        for (let i = -radius; i <= radius; i++) {
+          const idx = Math.min(inner - 1, Math.max(0, i));
+          sum += src[base + idx * strideInner + c];
+        }
+        for (let i = 0; i < inner; i++) {
+          dst[base + i * strideInner + c] = sum / windowSize;
+          const out = Math.max(0, i - radius);
+          const inn = Math.min(inner - 1, i + radius + 1);
+          sum +=
+            src[base + inn * strideInner + c] -
+            src[base + out * strideInner + c];
+        }
+      }
+    }
+  }
+
+  _tuneColorChannel(value, average, brightness) {
+    const saturated = average + (value - average) * COLOR_SATURATION;
+    return Math.max(0, Math.min(255, Math.round(saturated * brightness)));
+  }
+
+  _createBlurredBackground(pixbuf) {
+    try {
+      const width = pixbuf.get_width();
+      const height = pixbuf.get_height();
+      const channels = pixbuf.get_n_channels();
+      const hasAlpha = pixbuf.get_has_alpha();
+      const rowstride = pixbuf.get_rowstride();
+      const pixels = pixbuf.get_pixels();
+
+      // Copy into a tightly packed buffer (rowstride can carry padding).
+      const data = new Uint8Array(width * height * channels);
+      for (let y = 0; y < height; y++) {
+        const srcRow = y * rowstride;
+        const dstRow = y * width * channels;
+        for (let x = 0; x < width * channels; x++) {
+          data[dstRow + x] = pixels[srcRow + x];
+        }
+      }
+
+      // A real blur rather than a pixelated upscale of a tiny thumbnail.
+      const tmp = new Uint8Array(data.length);
+      for (let pass = 0; pass < BLUR_PASSES; pass++) {
+        this._boxBlurPass(
+          data,
+          tmp,
+          width,
+          height,
+          channels,
+          BLUR_RADIUS,
+          true,
+        );
+        this._boxBlurPass(
+          tmp,
+          data,
+          width,
+          height,
+          channels,
+          BLUR_RADIUS,
+          false,
+        );
+      }
+
+      // Keep the album colors loud: saturation boost plus a gentle vertical
+      // brightness ramp (brighter up top, darker where the controls sit).
+      for (let y = 0; y < height; y++) {
+        const t = height > 1 ? y / (height - 1) : 0;
+        const brightness =
+          BACKGROUND_BRIGHTNESS_TOP +
+          (BACKGROUND_BRIGHTNESS_BOTTOM - BACKGROUND_BRIGHTNESS_TOP) * t;
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * channels;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const avg = (r + g + b) / 3;
+          data[i] = this._tuneColorChannel(r, avg, brightness);
+          data[i + 1] = this._tuneColorChannel(g, avg, brightness);
+          data[i + 2] = this._tuneColorChannel(b, avg, brightness);
+        }
+      }
+
+      const background = GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(data),
+        pixbuf.get_colorspace(),
+        hasAlpha,
+        8,
+        width,
+        height,
+        width * channels,
+      );
+
+      const file = Gio.File.new_for_path(
+        GLib.build_filenamev([
+          GLib.get_tmp_dir(),
+          `gnome-spotify-bg-${this._bgSequence++}.png`,
+        ]),
+      );
+      background.savev(file.get_path(), "png", [], []);
+
+      this._deleteBackgroundFile();
+      this._bgFile = file;
+
+      return file.get_uri();
+    } catch (e) {
+      logWarn("Failed to create blurred artwork background:", e.message || e);
+      return null;
+    }
+  }
+
+  _clearCardBackground() {
+    this.container.style = "";
+    this._currentColors = null;
+    this._deleteBackgroundFile();
+  }
+
+  _deleteBackgroundFile() {
+    if (!this._bgFile) return;
+    try {
+      this._bgFile.delete(null);
+    } catch (e) {
+      logWarn("Failed to remove blurred artwork background");
+    }
+    this._bgFile = null;
   }
 
   _getAccentColor(color) {
@@ -911,25 +1109,61 @@ export class SpotifyUI {
     };
   }
 
-  _applyArtworkColor(dominantColor, _accentColor, _themeColor) {
-    // A darker album tint keeps text and controls legible across covers.
-    const top = Object.fromEntries(Object.entries(dominantColor).map(
-      ([channel, value]) => [channel, Math.round(value * 0.48 + 12)],
-    ));
-    const bottom = Object.fromEntries(Object.entries(top).map(
-      ([channel, value]) => [channel, Math.round(value * 0.55)],
-    ));
-    const rgb = color => `rgb(${color.r}, ${color.g}, ${color.b})`;
-    this.container.style = `background-gradient-direction: vertical;
-      background-gradient-start: ${rgb(top)};
-      background-gradient-end: ${rgb(bottom)};`;
+  _applyArtworkColor(
+    dominantColor,
+    _accentColor,
+    _themeColor,
+    backgroundUri = null,
+  ) {
+    const rgb = (color) => `rgb(${color.r}, ${color.g}, ${color.b})`;
+    let style;
+
+    if (backgroundUri) {
+      // Blurred cover at (almost) full strength with a transparent→dark
+      // gradient scrim painted over it for text legibility — like Spotify's
+      // own now-playing backdrop. The inline gradient also replaces the
+      // opaque one from stylesheet.css, which would otherwise fully cover
+      // the image (St paints the gradient above the background image).
+      style = `background-image: url("${backgroundUri}"); background-size: cover;
+        background-gradient-direction: vertical;
+        background-gradient-start: rgba(0, 0, 0, ${SCRIM_ALPHA_TOP});
+        background-gradient-end: rgba(0, 0, 0, ${SCRIM_ALPHA_BOTTOM});`;
+    } else {
+      // Fallback when the blurred image could not be built: a gradient
+      // tinted with the dominant album color.
+      const top = Object.fromEntries(
+        Object.entries(dominantColor).map(([channel, value]) => [
+          channel,
+          Math.round(value * 0.62 + 8),
+        ]),
+      );
+      const bottom = Object.fromEntries(
+        Object.entries(top).map(([channel, value]) => [
+          channel,
+          Math.round(value * 0.55),
+        ]),
+      );
+      style = `background-gradient-direction: vertical;
+        background-gradient-start: ${rgb(top)};
+        background-gradient-end: ${rgb(bottom)};`;
+    }
+
+    this.container.style = style;
     this._readableTextColor = "#FFFFFF";
     this._progressFilled.style = "background-color: #FFFFFF;";
-    if (this._onColorUpdate) this._onColorUpdate(bottom);
+
+    const menuTint = {
+      r: Math.round(dominantColor.r * MENU_TINT_FACTOR),
+      g: Math.round(dominantColor.g * MENU_TINT_FACTOR),
+      b: Math.round(dominantColor.b * MENU_TINT_FACTOR),
+    };
+    if (this._onColorUpdate) this._onColorUpdate(menuTint);
   }
 
   _getCardWidth() {
-    return this.useFixedWidth ? Math.max(320, Math.min(600, this.fixedWidth)) : 360;
+    return this.useFixedWidth
+      ? Math.max(320, Math.min(600, this.fixedWidth))
+      : 360;
   }
 
   _onWidthSettingsChanged() {
@@ -944,6 +1178,11 @@ export class SpotifyUI {
     if (this._destroyed) return;
     this._destroyed = true;
     this._stopProgressUpdate();
+    this._deleteBackgroundFile();
+    if (this._artworkSession) {
+      this._artworkSession.abort();
+      this._artworkSession = null;
+    }
     if (this._progressWidthChangedId) {
       this._progressBarContainer.disconnect(this._progressWidthChangedId);
       this._progressWidthChangedId = null;

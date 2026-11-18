@@ -368,6 +368,9 @@ export function clearAccessToken() {
   });
 }
 
+const REFRESH_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
+let lastRefreshFailureAt = 0;
+
 export async function getValidAccessToken() {
   if (
     tokenCache.accessToken &&
@@ -385,17 +388,48 @@ export async function getValidAccessToken() {
   const refreshToken = await getRefreshToken();
   if (!refreshToken) {
     logError("No refresh token found");
+    return null;
   }
 
-  const tokenData = await getAccessTokenFromRefresh(refreshToken);
-
-  await storeAccessToken(tokenData.access_token, tokenData.expires_in || 3600);
-
-  if (tokenData.refresh_token && tokenData.refresh_token !== refreshToken) {
-    await storeRefreshToken(tokenData.refresh_token);
+  // A failed refresh (e.g. revoked client id) must not hammer the token
+  // endpoint on every track change; back off for a few minutes.
+  if (
+    lastRefreshFailureAt &&
+    Date.now() - lastRefreshFailureAt < REFRESH_FAILURE_COOLDOWN_MS
+  ) {
+    return null;
   }
 
-  return tokenData.access_token;
+  try {
+    const tokenData = await getAccessTokenFromRefresh(refreshToken);
+
+    if (!tokenData || !tokenData.access_token) {
+      throw new Error(
+        tokenData?.error
+          ? `${tokenData.error} - ${tokenData.error_description || ""}`
+          : "Response did not contain an access token",
+      );
+    }
+
+    lastRefreshFailureAt = 0;
+
+    await storeAccessToken(
+      tokenData.access_token,
+      tokenData.expires_in || 3600,
+    );
+
+    if (tokenData.refresh_token && tokenData.refresh_token !== refreshToken) {
+      await storeRefreshToken(tokenData.refresh_token);
+    }
+
+    return tokenData.access_token;
+  } catch (e) {
+    lastRefreshFailureAt = Date.now();
+    logError(
+      `Token refresh failed (${e.message}). Please reconnect your Spotify account.`,
+    );
+    return null;
+  }
 }
 
 async function getAccessTokenFromRefresh(refreshToken) {
@@ -432,22 +466,13 @@ async function getAccessTokenFromRefresh(refreshToken) {
 
     const statusCode = msg.get_status();
     const responseText = new TextDecoder().decode(response.get_data());
+    const data = responseText && responseText.trim() !== ""
+      ? JSON.parse(responseText)
+      : {};
 
-    if (statusCode !== 200) {
-      logError(
-        `Token refresh failed with status ${statusCode}. Please reconnect your Spotify account.`,
-      );
-    }
-
-    if (!responseText || responseText.trim() === "") {
-      logError("Empty response from Spotify. Please reconnect your account.");
-    }
-
-    const data = JSON.parse(responseText);
-
-    if (data.error) {
-      logError(
-        `Spotify API error: ${data.error} - ${data.error_description || ""}`,
+    if (statusCode !== 200 || data.error || !data.access_token) {
+      throw new Error(
+        `HTTP ${statusCode}${data.error ? ` ${data.error} - ${data.error_description || ""}` : ""}`,
       );
     }
 

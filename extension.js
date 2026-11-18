@@ -153,7 +153,6 @@ const SpotifyIndicator = GObject.registerClass(
             ? displayText.substring(0, labelLength - 3) + "..."
             : displayText;
 
-        this._ui._checkSpotifyConnection();
         this._ui.update(metadata);
       } else {
         this._label.text = "Spotify";
