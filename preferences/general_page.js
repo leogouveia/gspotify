@@ -232,10 +232,10 @@ export function buildGeneralPage(window, settings, metadata) {
   const dragToken = GLib.uuid_string_random();
   const provider = new Gtk.CssProvider();
   provider.load_from_string(`
-    .gspotify-controls .drop-before { box-shadow: inset 0 2px @accent_color; }
-    .gspotify-controls .drop-after { box-shadow: inset 0 -2px @accent_color; }
+    .gspotify-lab-controls .drop-before { box-shadow: inset 0 2px @accent_color; }
+    .gspotify-lab-controls .drop-after { box-shadow: inset 0 -2px @accent_color; }
   `);
-  orderGroup.add_css_class("gspotify-controls");
+  orderGroup.add_css_class("gspotify-lab-controls");
   Gtk.StyleContext.add_provider_for_display(
     orderGroup.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
   );
@@ -526,7 +526,7 @@ export function buildGeneralPage(window, settings, metadata) {
   const aboutGroup = new Adw.PreferencesGroup();
   generalPage.add(aboutGroup);
   const aboutRow = new Adw.ActionRow({
-    title: "About GSpotify",
+    title: `About ${metadata.name}`,
     subtitle: "Learn more about this extension",
     activatable: true,
   });
@@ -534,7 +534,7 @@ export function buildGeneralPage(window, settings, metadata) {
     const currentYear = new Date().getFullYear();
     const about = new Adw.AboutWindow({
       application_name: metadata.name,
-      version: `${metadata.version}`,
+      version: metadata["version-name"] || `${metadata.version}`,
       developer_name: "sxoxgxi",
       website: metadata.url,
       issue_url: `${metadata.url}/issues`,

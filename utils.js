@@ -1,6 +1,6 @@
 import GLib from "gi://GLib";
 
-const EXTENSION_TAG = "[GSpotify]";
+const EXTENSION_TAG = "[GSpotify Lab]";
 
 export function getStatusSymbol(outputText) {
   if (!outputText || typeof outputText !== "string") return "⁉";

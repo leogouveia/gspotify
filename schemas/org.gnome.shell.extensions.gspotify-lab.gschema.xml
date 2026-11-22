@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<schemalist gettext-domain="gspotify">
-  <schema id="org.gnome.shell.extensions.gspotify" path="/org/gnome/shell/extensions/gspotify/">
+<schemalist gettext-domain="gspotify-lab">
+  <schema id="org.gnome.shell.extensions.gspotify-lab" path="/org/gnome/shell/extensions/gspotify-lab/">
     
     <key name="panel-position" type="i">
       <default>0</default>
@@ -25,7 +25,7 @@
     </key>
       
     <key name="download-folder" type="s">
-      <default>"~/GSpotifyDownloads"</default>
+      <default>"~/GSpotifyLabDownloads"</default>
       <summary>Download folder path</summary>
       <description>
       The directory where downloaded songs will be saved. You can set an absolute path or use ~ for the home directory.
@@ -106,7 +106,7 @@
     </key>
 
     <key name="spotify-callback-port" type="i">
-      <default>9000</default>
+      <default>9001</default>
       <summary>Spotify Callback Port</summary>
       <description>Spotify Callback Port</description>
     </key>

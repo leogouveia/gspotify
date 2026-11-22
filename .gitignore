@@ -2,3 +2,5 @@ node_modules/
 package-lock.json
 resource.d.ts
 schemas/gschemas.compiled
+dist/
+__pycache__/

@@ -11,7 +11,7 @@ let tokenCache = {
 };
 
 let CLIENT_ID = null;
-let PORT = 9000;
+let PORT = 9001;
 let REDIRECT_URI = null;
 let settings = null;
 
@@ -28,8 +28,8 @@ export function initializeAuth(settingsInstance) {
 
   PORT = settings.get_int("spotify-callback-port");
   if (PORT <= 0 || PORT > 65535) {
-    logError(`Invalid port number: ${PORT}, falling back to default 9000`);
-    PORT = 9000;
+    logError(`Invalid port number: ${PORT}, falling back to default 9001`);
+    PORT = 9001;
   }
 
   REDIRECT_URI = `http://127.0.0.1:${PORT}/callback`;
@@ -208,7 +208,7 @@ export async function exchangeCode(code, verifier) {
 
 function getRefreshTokenSchema() {
   return new Secret.Schema(
-    "io.github.gspotify.sxoxgxi",
+    "io.github.leogouveia.gspotify-lab.refresh",
     Secret.SchemaFlags.NONE,
     {
       refresh_token: Secret.SchemaAttributeType.STRING,
@@ -223,7 +223,7 @@ export function storeRefreshToken(token) {
       schema,
       { refresh_token: "spotify" },
       Secret.COLLECTION_DEFAULT,
-      "GSpotify Spotify Refresh Token",
+      "GSpotify Lab Spotify Refresh Token",
       token,
       null,
       (source, result) => {
@@ -278,7 +278,7 @@ export function deleteRefreshToken() {
 
 function getAccessTokenSchema() {
   return new Secret.Schema(
-    "io.github.gspotify.access",
+    "io.github.leogouveia.gspotify-lab.access",
     Secret.SchemaFlags.NONE,
     {
       access_token: Secret.SchemaAttributeType.STRING,
@@ -301,7 +301,7 @@ export function storeAccessToken(token, expiresIn) {
       schema,
       { access_token: "spotify" },
       Secret.COLLECTION_DEFAULT,
-      "GSpotify Spotify Access Token",
+      "GSpotify Lab Spotify Access Token",
       tokenData,
       null,
       (source, result) => {

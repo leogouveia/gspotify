@@ -1,4 +1,4 @@
-.spotify-card {
+.gspotify-lab-card {
   border-radius: 24px;
   padding: 18px;
   color: white;
@@ -8,69 +8,69 @@
   background-gradient-end: #211e2e;
 }
 
-.spotify-header {
+.gspotify-lab-header {
   spacing: 18px;
 }
 
-.spotify-info-box {
+.gspotify-lab-info-box {
   spacing: 6px;
 }
 
-.spotify-artwork {
+.gspotify-lab-artwork {
   border-radius: 14px;
   background-color: rgba(255, 255, 255, 0.08);
   background-size: cover;
   box-shadow: 0 5px 12px rgba(0, 0, 0, 0.22);
 }
 
-.spotify-source {
+.gspotify-lab-source {
   font-size: 10px;
   font-weight: bold;
   color: rgba(255, 255, 255, 0.6);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-.spotify-title {
+.gspotify-lab-title {
   font-size: 18px;
   font-weight: bold;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
 }
 
-.spotify-artist {
+.gspotify-lab-artist {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.75);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-.spotify-playback-controls {
+.gspotify-lab-playback-controls {
   margin-top: 16px;
   margin-bottom: 10px;
   spacing: 20px;
 }
 
-.spotify-progress-bar {
+.gspotify-lab-progress-bar {
   height: 14px;
 }
 
-.spotify-progress-track {
+.gspotify-lab-progress-track {
   height: 4px;
   border-radius: 2px;
   background-color: rgba(255, 255, 255, 0.22);
 }
 
-.spotify-progress-filled {
+.gspotify-lab-progress-filled {
   background-color: white;
   border-radius: 2px;
 }
 
-.spotify-progress-times {
+.gspotify-lab-progress-times {
   margin-top: 3px;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.65);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-.spotify-button {
+.gspotify-lab-button {
   width: 40px;
   height: 40px;
   border-radius: 20px;
@@ -81,15 +81,15 @@
     color 150ms ease;
 }
 
-.spotify-button:hover {
+.gspotify-lab-button:hover {
   background-color: rgba(255, 255, 255, 0.1);
 }
 
-.spotify-button:active {
+.gspotify-lab-button:active {
   background-color: rgba(255, 255, 255, 0.2);
 }
 
-.spotify-button-secondary {
+.gspotify-lab-button-secondary {
   width: 36px;
   height: 36px;
   border-radius: 18px;
@@ -101,15 +101,15 @@
     color 150ms ease;
 }
 
-.spotify-button-secondary:hover {
+.gspotify-lab-button-secondary:hover {
   background-color: rgba(255, 255, 255, 0.2);
 }
 
-.spotify-button-secondary:active {
+.gspotify-lab-button-secondary:active {
   background-color: rgba(255, 255, 255, 0.3);
 }
 
-.spotify-close-button {
+.gspotify-lab-close-button {
   width: 36px;
   height: 36px;
   border-radius: 18px;
@@ -121,26 +121,26 @@
     color 150ms ease;
 }
 
-.spotify-close-button:hover {
+.gspotify-lab-close-button:hover {
   background-color: rgba(255, 0, 0, 0.2);
 }
 
-.spotify-close-button:active {
+.gspotify-lab-close-button:active {
   background-color: rgba(255, 0, 0, 0.3);
 }
 
-.spotify-additional-controls {
+.gspotify-lab-additional-controls {
   margin-top: 12px;
   spacing: 8px;
 }
 
-.spotify-separator {
+.gspotify-lab-separator {
   background-color: rgba(255, 255, 255, 0.1);
   height: 1px;
   margin-top: 12px;
 }
 
-.spotify-play-button {
+.gspotify-lab-play-button {
   width: 48px;
   height: 48px;
   padding: 0;
@@ -149,10 +149,10 @@
   background-color: white;
 }
 
-.spotify-play-button:hover {
+.gspotify-lab-play-button:hover {
   background-color: #e6e2f1;
 }
 
-.spotify-play-button:active {
+.gspotify-lab-play-button:active {
   background-color: #ccc5dd;
 }

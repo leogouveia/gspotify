@@ -4,7 +4,7 @@ import { logError, logInfo } from "./utils.js";
 
 const CONFIG_DIR = GLib.build_filenamev([
   GLib.get_user_config_dir(),
-  "gspotify",
+  "gspotify-lab",
 ]);
 const ARCHIVE_DIR = GLib.build_filenamev([CONFIG_DIR, "archived"]);
 

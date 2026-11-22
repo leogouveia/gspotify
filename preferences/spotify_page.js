@@ -311,7 +311,7 @@ export function buildSpotifyPage(window, settings) {
     const dialog = new Adw.MessageDialog({
       transient_for: window,
       heading: "Connect Spotify",
-      body: "This will connect GSpotify to your Spotify account via the web interface.",
+      body: "This will connect GSpotify Lab to your Spotify account via the web interface.",
     });
 
     dialog.add_response("cancel", "Cancel");

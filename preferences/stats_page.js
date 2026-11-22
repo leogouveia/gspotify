@@ -175,7 +175,7 @@ export function buildStatsPage(window, settings) {
   openLocalDataButton.connect("clicked", () => {
     const directory = GLib.build_filenamev([
       GLib.get_user_config_dir(),
-      "gspotify",
+      "gspotify-lab",
     ]);
     const file = Gio.file_new_for_path(directory);
     const fileUri = file.get_uri();

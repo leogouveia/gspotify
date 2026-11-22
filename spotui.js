@@ -38,7 +38,7 @@ export class SpotifyUI {
     // reliable from inside the gnome-shell process.
     this._artworkSession = new Soup.Session();
     this._artworkSession.timeout = 15;
-    this._artworkSession.user_agent = "gnome-shell-gspotify";
+    this._artworkSession.user_agent = "gnome-shell-gspotify-lab";
     this._isPlaying = false;
     this._progressTimeout = null;
     this._lastUpdateTime = null;
@@ -68,7 +68,7 @@ export class SpotifyUI {
 
   _buildUI() {
     this.container = new St.BoxLayout({
-      style_class: "spotify-card",
+      style_class: "gspotify-lab-card",
       orientation: Clutter.Orientation.VERTICAL,
       width: this._getCardWidth(),
       x_expand: false,
@@ -81,7 +81,7 @@ export class SpotifyUI {
     this._buildProgressBar();
 
     this._separator = new St.Widget({
-      style_class: "spotify-separator",
+      style_class: "gspotify-lab-separator",
       x_expand: true,
       y_expand: false,
     });
@@ -92,7 +92,7 @@ export class SpotifyUI {
 
   _buildHeader() {
     this._headerBox = new St.BoxLayout({
-      style_class: "spotify-header",
+      style_class: "gspotify-lab-header",
       orientation: Clutter.Orientation.HORIZONTAL,
       x_align: Clutter.ActorAlign.FILL,
       x_expand: true,
@@ -106,7 +106,7 @@ export class SpotifyUI {
 
   _buildArtworkSection() {
     this._artwork = new St.Bin({
-      style_class: "spotify-artwork",
+      style_class: "gspotify-lab-artwork",
       width: 96,
       height: 96,
     });
@@ -115,7 +115,7 @@ export class SpotifyUI {
 
   _buildPlaybackControls() {
     this._playbackControls = new St.BoxLayout({
-      style_class: "spotify-playback-controls",
+      style_class: "gspotify-lab-playback-controls",
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
     });
@@ -127,7 +127,7 @@ export class SpotifyUI {
     this._playButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button spotify-play-button",
+      style_class: "gspotify-lab-button gspotify-lab-play-button",
       accessible_name: "Play",
       child: this._playIcon,
     });
@@ -141,7 +141,7 @@ export class SpotifyUI {
     this._prevButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button",
+      style_class: "gspotify-lab-button",
       child: new St.Icon({
         icon_name: "media-skip-backward-symbolic",
         icon_size: 16,
@@ -155,7 +155,7 @@ export class SpotifyUI {
   _buildInfoSection() {
     const infoBoxWidth = this._getCardWidth() - 96 - 18 - 36;
     this._infoBox = new St.BoxLayout({
-      style_class: "spotify-info-box",
+      style_class: "gspotify-lab-info-box",
       orientation: Clutter.Orientation.VERTICAL,
       width: infoBoxWidth,
       x_expand: true,
@@ -167,12 +167,12 @@ export class SpotifyUI {
 
     this._infoBox.add_child(
       new St.Label({
-        style_class: "spotify-source",
+        style_class: "gspotify-lab-source",
         text: "SPOTIFY",
       }),
     );
     this._titleLabel = new St.Label({
-      style_class: "spotify-title",
+      style_class: "gspotify-lab-title",
       text: "No track playing",
       x_expand: true,
       x_align: Clutter.ActorAlign.FILL,
@@ -183,7 +183,7 @@ export class SpotifyUI {
     this._infoBox.add_child(this._titleLabel);
 
     this._artistLabel = new St.Label({
-      style_class: "spotify-artist",
+      style_class: "gspotify-lab-artist",
       text: "",
       x_expand: true,
       x_align: Clutter.ActorAlign.FILL,
@@ -216,7 +216,7 @@ export class SpotifyUI {
     this._nextButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button",
+      style_class: "gspotify-lab-button",
       child: new St.Icon({
         icon_name: "media-skip-forward-symbolic",
         icon_size: 16,
@@ -229,30 +229,30 @@ export class SpotifyUI {
 
   _buildProgressBar() {
     this._progressBox = new St.BoxLayout({
-      style_class: "spotify-progress-section",
+      style_class: "gspotify-lab-progress-section",
       orientation: Clutter.Orientation.VERTICAL,
       x_expand: true,
     });
     this._progressBarContainer = new St.Widget({
-      style_class: "spotify-progress-bar",
+      style_class: "gspotify-lab-progress-bar",
       x_expand: true,
       reactive: true,
     });
 
     this._progressTrack = new St.Widget({
-      style_class: "spotify-progress-track",
+      style_class: "gspotify-lab-progress-track",
     });
     this._progressTrack.set_position(0, 5);
     this._progressBarContainer.add_child(this._progressTrack);
     this._progressFilled = new St.Widget({
-      style_class: "spotify-progress-filled",
+      style_class: "gspotify-lab-progress-filled",
       height: 4,
     });
     this._progressFilled.set_position(0, 5);
     this._progressBarContainer.add_child(this._progressFilled);
 
     this._progressHandle = new St.Widget({
-      style_class: "spotify-progress-handle",
+      style_class: "gspotify-lab-progress-handle",
       style:
         "width: 10px; height: 10px; border-radius: 20px; background-color: white;",
       reactive: true,
@@ -319,7 +319,7 @@ export class SpotifyUI {
     );
 
     this._progressBox.add_child(this._progressBarContainer);
-    const times = new St.BoxLayout({ style_class: "spotify-progress-times" });
+    const times = new St.BoxLayout({ style_class: "gspotify-lab-progress-times" });
     this._elapsedLabel = new St.Label({ text: "0:00" });
     this._durationLabel = new St.Label({ text: "0:00" });
     times.add_child(this._elapsedLabel);
@@ -363,7 +363,7 @@ export class SpotifyUI {
 
   _buildAdditionalControls() {
     this._additionalControls = new St.BoxLayout({
-      style_class: "spotify-additional-controls",
+      style_class: "gspotify-lab-additional-controls",
       orientation: Clutter.Orientation.HORIZONTAL,
       x_align: Clutter.ActorAlign.FILL,
     });
@@ -412,7 +412,7 @@ export class SpotifyUI {
   _buildSpacerLabel() {
     this._spacerLabel = new St.Label({
       text: "",
-      style_class: "spotify-spacer-label",
+      style_class: "gspotify-lab-spacer-label",
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
       x_expand: true,
@@ -425,7 +425,7 @@ export class SpotifyUI {
     this._shuffleButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button-secondary",
+      style_class: "gspotify-lab-button-secondary",
       child: new St.Icon({
         icon_name: "media-playlist-shuffle-symbolic",
         icon_size: 16,
@@ -440,7 +440,7 @@ export class SpotifyUI {
     this._spotifyToggleButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button-secondary",
+      style_class: "gspotify-lab-button-secondary",
       child: new St.Icon({
         icon_name: "view-reveal-symbolic",
         icon_size: 16,
@@ -455,7 +455,7 @@ export class SpotifyUI {
     this._closeButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-close-button",
+      style_class: "gspotify-lab-close-button",
       child: new St.Icon({
         icon_name: "process-stop-symbolic",
         icon_size: 16,
@@ -469,7 +469,7 @@ export class SpotifyUI {
     this._settingsButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button-secondary",
+      style_class: "gspotify-lab-button-secondary",
       child: new St.Icon({
         icon_name: "preferences-system-symbolic",
         icon_size: 16,
@@ -488,7 +488,7 @@ export class SpotifyUI {
     this._downloadButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button-secondary",
+      style_class: "gspotify-lab-button-secondary",
       child: new St.Icon({
         icon_name: "folder-download-symbolic",
         icon_size: 16,
@@ -505,7 +505,7 @@ export class SpotifyUI {
     this._likeButton = new St.Button({
       x_align: Clutter.ActorAlign.CENTER,
       y_align: Clutter.ActorAlign.CENTER,
-      style_class: "spotify-button-secondary",
+      style_class: "gspotify-lab-button-secondary",
       child: new St.Icon({
         gicon: Gio.Icon.new_for_string(
           `${this._extension.path}/icons/heart-outline-thin-symbolic.svg`,
@@ -857,7 +857,7 @@ export class SpotifyUI {
       const tempDir = GLib.get_tmp_dir();
       const tempFile = GLib.build_filenamev([
         tempDir,
-        "gnome-spotify-artwork.jpg",
+        "gnome-gspotify-lab-artwork.jpg",
       ]);
 
       const file = Gio.File.new_for_path(tempFile);
@@ -1060,7 +1060,7 @@ export class SpotifyUI {
       const file = Gio.File.new_for_path(
         GLib.build_filenamev([
           GLib.get_tmp_dir(),
-          `gnome-spotify-bg-${this._bgSequence++}.png`,
+          `gnome-gspotify-lab-bg-${this._bgSequence++}.png`,
         ]),
       );
       background.savev(file.get_path(), "png", [], []);

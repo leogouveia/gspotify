@@ -23,9 +23,10 @@ import { cleanupSpotifyAuth } from "./spotify-auth.js";
 const SHELL_VERSION = parseFloat(Config.PACKAGE_VERSION);
 
 const SpotifyIndicator = GObject.registerClass(
+  { GTypeName: "GSpotifyLabIndicator" },
   class SpotifyIndicator extends PanelMenu.Button {
     _init(extension, panelPosition = 0) {
-      super._init(0.5, "Spotify Indicator", false);
+      super._init(0.5, "GSpotify Lab Indicator", false);
       this._extension = extension;
       this._panelPosition = panelPosition;
       this._volumeTimeout = null;
@@ -194,9 +195,10 @@ const SpotifyIndicator = GObject.registerClass(
 );
 
 const IconIndicator = GObject.registerClass(
+  { GTypeName: "GSpotifyLabIconIndicator" },
   class IconIndicator extends PanelMenu.Button {
     _init(extension, panelPosition = 0) {
-      super._init(0.5, "Icon Indicator", true);
+      super._init(0.5, "GSpotify Lab Icon Indicator", true);
       this._extension = extension;
       this._panelPosition = panelPosition;
 
@@ -576,7 +578,7 @@ export default class SpotifyExtension extends Extension {
     if (!this._settings) return null;
     if (!this._notificationSource) {
       this._notificationSource = new MessageTray.Source({
-        title: "GSpotify",
+        title: "GSpotify Lab",
         iconName: "multimedia-player-symbolic",
       });
       this._notificationSource.connect("destroy", () => {
@@ -594,7 +596,7 @@ export default class SpotifyExtension extends Extension {
 
   showQuickTips() {
     if (!this._settings.get_boolean("show-info-tip")) return;
-    this.sendNotification("GSpotify — quick tips", INFO_TIPS.join("\n"),
+    this.sendNotification("GSpotify Lab — quick tips", INFO_TIPS.join("\n"),
       "multimedia-player-symbolic",
       { label: "Open preferences", callback: () => this.openPreferences() });
     this._settings.set_boolean("show-info-tip", false);
