@@ -34,7 +34,7 @@ It is designed to be theme-aware, and customizable\*
 - [x] Shuffle and repeat buttons if available.
 - [x] Add support for track downloading.
 - [x] Local Statistics.
-- [ ] Synced and Plain Lyrics.
+- [ ] Add a setting to switch between compact and expanded player layouts (the expanded layout uses larger artwork and a separate playback controls row).
 
 ---
 

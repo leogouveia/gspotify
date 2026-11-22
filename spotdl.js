@@ -1,6 +1,7 @@
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 
+import { findSpotDL } from "./spotdl-path.js";
 import { logInfo, logWarn } from "./utils.js";
 
 export class SpotDLExecutor {
@@ -9,7 +10,7 @@ export class SpotDLExecutor {
   }
 
   downloadSong(metadata, onOutput, onComplete) {
-    let args = ["spotdl"];
+    const args = [];
 
     if (metadata.output) {
       args.push("--output", metadata.output);
@@ -23,20 +24,21 @@ export class SpotDLExecutor {
       args.push(metadata.query);
     }
 
-    logInfo("Executing command", args);
-
     this._executeCommand(args, onOutput, onComplete);
   }
 
   executeCustomCommand(args, onOutput, onComplete) {
-    let fullArgs = ["spotdl", ...args];
-    this._executeCommand(fullArgs, onOutput, onComplete);
+    this._executeCommand(args, onOutput, onComplete);
   }
 
   _executeCommand(args, onOutput, onComplete) {
     try {
+      const executable = this.executablePath;
+      if (!executable) throw new Error("SpotDL executable not found");
+      const command = [executable, ...args];
+      logInfo("Executing command", command);
       let proc = Gio.Subprocess.new(
-        args,
+        command,
         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
       );
 
@@ -120,25 +122,12 @@ export class SpotDLExecutor {
     this.cancellable = new Gio.Cancellable();
   }
 
-  checkSpotDLInstalled(callback) {
-    try {
-      let proc = Gio.Subprocess.new(
-        ["which", "spotdl"],
-        Gio.SubprocessFlags.STDOUT_PIPE,
-      );
+  get executablePath() {
+    return findSpotDL();
+  }
 
-      proc.wait_async(null, (proc, result) => {
-        try {
-          proc.wait_finish(result);
-          let exitCode = proc.get_exit_status();
-          callback(exitCode === 0);
-        } catch (e) {
-          callback(false);
-        }
-      });
-    } catch (e) {
-      callback(false);
-    }
+  checkSpotDLInstalled(callback) {
+    callback(this.executablePath !== null);
   }
 
   destroy() {

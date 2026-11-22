@@ -3,11 +3,23 @@ import Clutter from "gi://Clutter";
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import GdkPixbuf from "gi://GdkPixbuf";
+import Pango from "gi://Pango";
+import Soup from "gi://Soup";
 
-import { INFO_TIPS } from "./constants.js";
 import { toggleSpotifyWindow, logWarn, logInfo } from "./utils.js";
 import { toggleLike, isTrackLiked } from "./spotify-helper.js";
 import { getValidAccessToken } from "./spotify-auth.js";
+
+// Look of the blurred album-art card background (easy to tweak):
+const BLUR_SIZE = 128; // source resolution before blurring (bigger = smoother)
+const BLUR_RADIUS = 6; // box-blur radius; several passes approximate gaussian
+const BLUR_PASSES = 3;
+const COLOR_SATURATION = 1.3; // > 1 keeps album colors strong instead of pastel
+const BACKGROUND_BRIGHTNESS_TOP = 0.95; // mild baked ramp; most of the
+const BACKGROUND_BRIGHTNESS_BOTTOM = 0.85; // darkening comes from the scrim
+const SCRIM_ALPHA_TOP = 0.15; // transparent→dark gradient painted OVER the
+const SCRIM_ALPHA_BOTTOM = 0.4; // cover so white text stays readable
+const MENU_TINT_FACTOR = 0.38; // dominant-color tint of the popup around card
 
 export class SpotifyUI {
   constructor(indicator, extension, onColorUpdate = null) {
@@ -18,6 +30,15 @@ export class SpotifyUI {
     this._currentColors = null;
     this._readableTextColor = null;
     this._currentArtworkUrl = null;
+    this._bgFile = null;
+    this._bgSequence = 0;
+
+    // Remote artwork (new Spotify clients expose mpris:artUrl as https://
+    // CDN links) is fetched with libsoup instead of Gio/gvfs, which is not
+    // reliable from inside the gnome-shell process.
+    this._artworkSession = new Soup.Session();
+    this._artworkSession.timeout = 15;
+    this._artworkSession.user_agent = "gnome-shell-gspotify";
     this._isPlaying = false;
     this._progressTimeout = null;
     this._lastUpdateTime = null;
@@ -49,12 +70,14 @@ export class SpotifyUI {
     this.container = new St.BoxLayout({
       style_class: "spotify-card",
       orientation: Clutter.Orientation.VERTICAL,
-      width: this.useFixedWidth ? this.fixedWidth : -1,
-      x_expand: !this.useFixedWidth,
-      y_expand: true,
+      width: this._getCardWidth(),
+      x_expand: false,
+      y_expand: false,
     });
 
+    this.container.connect("destroy", () => this.destroy());
     this._buildHeader();
+    this._buildPlaybackControls();
     this._buildProgressBar();
 
     this._separator = new St.Widget({
@@ -65,15 +88,6 @@ export class SpotifyUI {
     this.container.add_child(this._separator);
 
     this._buildAdditionalControls();
-    if (this._settings.get_boolean("show-info-tip")) {
-      this._tipSeparator = new St.Widget({
-        style_class: "spotify-separator",
-        x_expand: true,
-        y_expand: false,
-      });
-      this.container.add_child(this._tipSeparator);
-      this._buildInfoTip();
-    }
   }
 
   _buildHeader() {
@@ -85,81 +99,48 @@ export class SpotifyUI {
     });
 
     this._buildArtworkSection();
-    this._buildPrevButton();
-
     this._buildInfoSection();
-    this._buildNextButton();
 
     this.container.add_child(this._headerBox);
   }
 
   _buildArtworkSection() {
-    this._artworkContainer = new St.Widget({
-      style_class: "spotify-artwork-container",
-      layout_manager: new Clutter.BinLayout(),
-      width: 64,
-      height: 64,
-    });
-
     this._artwork = new St.Bin({
       style_class: "spotify-artwork",
-      width: 64,
-      height: 64,
+      width: 96,
+      height: 96,
     });
-    this._artworkContainer.add_child(this._artwork);
-
-    this._overlayIcon = new St.Icon({
-      icon_name: "media-playback-start-symbolic",
-      icon_size: 32,
-      opacity: 0,
-    });
-    this._artworkContainer.add_child(this._overlayIcon);
-    this._overlayIcon.set_position((64 - 32) / 2, (64 - 32) / 2);
-
-    this._artworkBox = new St.Button({
-      style_class: "spotify-artwork-box",
-      child: this._artworkContainer,
-    });
-
-    this._artworkBox.connect("clicked", () => this._onPlayPause());
-
-    this._headerBox.add_child(this._artworkBox);
+    this._headerBox.add_child(this._artwork);
   }
 
-  _buildInfoTip() {
-    this._infoTipBox = new St.BoxLayout({
-      reactive: true,
-      track_hover: true,
-      orientation: Clutter.Orientation.VERTICAL,
+  _buildPlaybackControls() {
+    this._playbackControls = new St.BoxLayout({
+      style_class: "spotify-playback-controls",
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
     });
-
-    INFO_TIPS.forEach((tip, index) => {
-      const tipLabel = new St.Label({
-        text: `✗ ${tip}`,
-        style_class: "spotify-info-tip",
-        reactive: true,
-      });
-
-      if (index !== INFO_TIPS.length - 1) {
-        tipLabel.set_style("margin-bottom: 2px");
-      }
-
-      tipLabel.connect("button-press-event", () => {
-        this._infoTipBox.remove_child(tipLabel);
-        if (this._infoTipBox.get_n_children() === 0) {
-          this._infoTipBox.destroy();
-          this._tipSeparator.destroy();
-        }
-      });
-      this._infoTipBox.add_child(tipLabel);
+    this._buildPrevButton();
+    this._playIcon = new St.Icon({
+      icon_name: "media-playback-start-symbolic",
+      icon_size: 24,
     });
-
-    this._infoTipBox.set_style("margin-top: 8px");
-    this.container.add_child(this._infoTipBox);
+    this._playButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+      style_class: "spotify-button spotify-play-button",
+      accessible_name: "Play",
+      child: this._playIcon,
+    });
+    this._playButton.connect("clicked", () => this._onPlayPause());
+    this._playbackControls.add_child(this._playButton);
+    this._buildNextButton();
+    this.container.add_child(this._playbackControls);
   }
 
   _buildPrevButton() {
     this._prevButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button",
       child: new St.Icon({
         icon_name: "media-skip-backward-symbolic",
@@ -167,39 +148,48 @@ export class SpotifyUI {
       }),
     });
     this._prevButton.connect("clicked", () => this._control("previous"));
-    this._headerBox.add_child(this._prevButton);
+    this._prevButton.accessible_name = "Previous track";
+    this._playbackControls.add_child(this._prevButton);
   }
 
   _buildInfoSection() {
-    const infoBoxWidth = this.useFixedWidth
-      ? this.fixedWidth - 64 - 32 - 40
-      : -1;
+    const infoBoxWidth = this._getCardWidth() - 96 - 18 - 36;
     this._infoBox = new St.BoxLayout({
       style_class: "spotify-info-box",
       orientation: Clutter.Orientation.VERTICAL,
       width: infoBoxWidth,
-      x_expand: !this.useFixedWidth,
-      x_align: Clutter.ActorAlign.CENTER,
+      x_expand: true,
+      x_align: Clutter.ActorAlign.FILL,
       y_align: Clutter.ActorAlign.CENTER,
       reactive: true,
       track_hover: true,
     });
 
+    this._infoBox.add_child(
+      new St.Label({
+        style_class: "spotify-source",
+        text: "SPOTIFY",
+      }),
+    );
     this._titleLabel = new St.Label({
       style_class: "spotify-title",
       text: "No track playing",
-      x_align: Clutter.ActorAlign.CENTER,
+      x_expand: true,
+      x_align: Clutter.ActorAlign.FILL,
     });
 
-    this._titleLabel.clutter_text.ellipsize = 3;
+    this._titleLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
     this._titleLabel.clutter_text.line_wrap = false;
     this._infoBox.add_child(this._titleLabel);
 
     this._artistLabel = new St.Label({
       style_class: "spotify-artist",
       text: "",
-      x_align: Clutter.ActorAlign.CENTER,
+      x_expand: true,
+      x_align: Clutter.ActorAlign.FILL,
     });
+    this._artistLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    this._artistLabel.clutter_text.line_wrap = false;
     this._infoBox.add_child(this._artistLabel);
 
     this._infoBoxClickId = this._infoBox.connect("button-press-event", () => {
@@ -224,6 +214,8 @@ export class SpotifyUI {
 
   _buildNextButton() {
     this._nextButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button",
       child: new St.Icon({
         icon_name: "media-skip-forward-symbolic",
@@ -231,22 +223,32 @@ export class SpotifyUI {
       }),
     });
     this._nextButton.connect("clicked", () => this._control("next"));
-    this._headerBox.add_child(this._nextButton);
+    this._nextButton.accessible_name = "Next track";
+    this._playbackControls.add_child(this._nextButton);
   }
 
   _buildProgressBar() {
+    this._progressBox = new St.BoxLayout({
+      style_class: "spotify-progress-section",
+      orientation: Clutter.Orientation.VERTICAL,
+      x_expand: true,
+    });
     this._progressBarContainer = new St.Widget({
       style_class: "spotify-progress-bar",
-      style: "height: 4px; border-radius: 2px; margin: 8px 0px 0px 0px;",
       x_expand: true,
       reactive: true,
     });
 
+    this._progressTrack = new St.Widget({
+      style_class: "spotify-progress-track",
+    });
+    this._progressTrack.set_position(0, 5);
+    this._progressBarContainer.add_child(this._progressTrack);
     this._progressFilled = new St.Widget({
       style_class: "spotify-progress-filled",
       height: 4,
     });
-    this._progressFilled.set_position(0, 0);
+    this._progressFilled.set_position(0, 5);
     this._progressBarContainer.add_child(this._progressFilled);
 
     this._progressHandle = new St.Widget({
@@ -255,7 +257,7 @@ export class SpotifyUI {
         "width: 10px; height: 10px; border-radius: 20px; background-color: white;",
       reactive: true,
     });
-    this._progressHandle.set_position(-5, -4);
+    this._progressHandle.set_position(-5, 2);
     this._progressBarContainer.add_child(this._progressHandle);
 
     this._isDragging = false;
@@ -316,7 +318,19 @@ export class SpotifyUI {
       },
     );
 
-    this.container.add_child(this._progressBarContainer);
+    this._progressBox.add_child(this._progressBarContainer);
+    const times = new St.BoxLayout({ style_class: "spotify-progress-times" });
+    this._elapsedLabel = new St.Label({ text: "0:00" });
+    this._durationLabel = new St.Label({ text: "0:00" });
+    times.add_child(this._elapsedLabel);
+    times.add_child(new St.Widget({ x_expand: true }));
+    times.add_child(this._durationLabel);
+    this._progressBox.add_child(times);
+    this.container.add_child(this._progressBox);
+    this._progressWidthChangedId = this._progressBarContainer.connect(
+      "notify::width",
+      () => this._updateProgressBar(),
+    );
   }
 
   _calculateProgressPosition(actor, event) {
@@ -345,17 +359,6 @@ export class SpotifyUI {
     // update ui
     this._currentPosition = newPosition;
     this._updateProgressBar();
-  }
-
-  _updateProgressBar() {
-    if (this._duration <= 0) return;
-
-    const progress = Math.min(this._currentPosition / this._duration, 1);
-    const barWidth = this._progressBarContainer.width;
-    const filledWidth = Math.floor(progress * barWidth);
-
-    this._progressFilled.set_size(filledWidth, 4);
-    this._progressHandle.set_position(filledWidth - 5, -4);
   }
 
   _buildAdditionalControls() {
@@ -420,6 +423,8 @@ export class SpotifyUI {
 
   _buildShuffleButton() {
     this._shuffleButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button-secondary",
       child: new St.Icon({
         icon_name: "media-playlist-shuffle-symbolic",
@@ -433,6 +438,8 @@ export class SpotifyUI {
 
   _buildSpotifyToggleButton() {
     this._spotifyToggleButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button-secondary",
       child: new St.Icon({
         icon_name: "view-reveal-symbolic",
@@ -446,6 +453,8 @@ export class SpotifyUI {
 
   _buildCloseButton() {
     this._closeButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-close-button",
       child: new St.Icon({
         icon_name: "process-stop-symbolic",
@@ -458,6 +467,8 @@ export class SpotifyUI {
 
   _buildSettingsButton() {
     this._settingsButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button-secondary",
       child: new St.Icon({
         icon_name: "preferences-system-symbolic",
@@ -475,6 +486,8 @@ export class SpotifyUI {
 
   _buildDownloadButton() {
     this._downloadButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button-secondary",
       child: new St.Icon({
         icon_name: "folder-download-symbolic",
@@ -490,6 +503,8 @@ export class SpotifyUI {
 
   _buildLikeButton() {
     this._likeButton = new St.Button({
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
       style_class: "spotify-button-secondary",
       child: new St.Icon({
         gicon: Gio.Icon.new_for_string(
@@ -580,38 +595,14 @@ export class SpotifyUI {
   }
 
   _onPlayPause() {
-    const newPlaying = !this._isPlaying;
-
-    this._overlayIcon.icon_name = newPlaying
-      ? "media-playback-start-symbolic"
-      : "media-playback-pause-symbolic";
-    this._overlayIcon.opacity = 0;
-
-    this._animateOverlayIcon();
     this._control("playpause");
-
-    this._isPlaying = newPlaying;
-
-    if (this._isPlaying) {
-      this._startProgressUpdate();
-    } else {
-      this._stopProgressUpdate();
-    }
   }
 
-  _animateOverlayIcon() {
-    this._overlayIcon.ease({
-      opacity: 255,
-      duration: 300,
-      mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
-      onComplete: () => {
-        this._overlayIcon.ease({
-          opacity: 0,
-          duration: 300,
-          mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
-        });
-      },
-    });
+  _syncPlayButton() {
+    this._playIcon.icon_name = this._isPlaying
+      ? "media-playback-pause-symbolic"
+      : "media-playback-start-symbolic";
+    this._playButton.accessible_name = this._isPlaying ? "Pause" : "Play";
   }
 
   _control(action) {
@@ -623,9 +614,11 @@ export class SpotifyUI {
   async update(metadata) {
     if (!metadata?.success) return;
 
-    await this._checkSpotifyConnection();
     this._currentMetadata = metadata;
 
+    // Render the card first so track data, progress and artwork appear
+    // immediately. Account status only affects the like button and is
+    // refreshed (off the critical path) on track changes below.
     this._updateText(metadata);
     this._updateProgress(metadata);
     this._updatePlayState(metadata);
@@ -639,14 +632,18 @@ export class SpotifyUI {
         metadata.trackId || "/org/mpris/MediaPlayer2/TrackList/NoTrack";
       if (trackId && trackId !== this._currentTrackId) {
         this._currentTrackId = trackId;
-        await this._checkLikeStatus();
-        this._updateLikeButtonIcon();
+        await this._refreshLikeState();
       }
     } else {
       this._currentTrackId = null;
       this._isLiked = false;
       this._updateLikeButtonIcon();
     }
+  }
+
+  async _refreshLikeState() {
+    await this._checkSpotifyConnection();
+    await this._checkLikeStatus();
   }
 
   async _checkLikeStatus() {
@@ -694,11 +691,8 @@ export class SpotifyUI {
       this._artistLabel.text = "Unknown Artist";
       return;
     }
-    this._titleLabel.text =
-      metadata.title.length > 40
-        ? metadata.title.substring(0, 37) + "..."
-        : metadata.title;
-    this._artistLabel.text = metadata.artist;
+    this._titleLabel.text = metadata.title;
+    this._artistLabel.text = metadata.artist || "Unknown Artist";
   }
 
   _updateProgress(metadata) {
@@ -719,20 +713,24 @@ export class SpotifyUI {
     }
   }
 
+  _formatTime(milliseconds) {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+
   _updateProgressBar() {
-    if (this._duration <= 0) return;
-
-    const progress = Math.min(this._currentPosition / this._duration, 1);
+    const position = Math.max(
+      0,
+      Math.min(this._currentPosition, this._duration),
+    );
+    const progress = this._duration > 0 ? position / this._duration : 0;
     const barWidth = this._progressBarContainer.width;
-
-    this._progressFilled.width = Math.floor(progress * barWidth);
-
-    if (this._progressHandle) {
-      this._progressHandle.set_position(
-        Math.floor(progress * barWidth) - 6,
-        -4,
-      );
-    }
+    const filledWidth = Math.floor(progress * barWidth);
+    this._progressTrack.width = barWidth;
+    this._progressFilled.width = filledWidth;
+    this._progressHandle.set_position(filledWidth - 5, 2);
+    this._elapsedLabel.text = this._formatTime(position);
+    this._durationLabel.text = this._formatTime(this._duration);
   }
 
   _startProgressUpdate() {
@@ -772,8 +770,10 @@ export class SpotifyUI {
   _updatePlayState(metadata) {
     const wasPlaying = this._isPlaying;
     this._isPlaying = metadata.isPlaying || false;
+    this._syncPlayButton();
 
     if (this._isPlaying && !wasPlaying) {
+      this._lastUpdateTime = GLib.get_monotonic_time() / 1000;
       this._startProgressUpdate();
     } else if (!this._isPlaying && wasPlaying) {
       this._stopProgressUpdate();
@@ -789,6 +789,7 @@ export class SpotifyUI {
       this._loadArtwork(metadata.artworkUrl);
     } else if (!metadata.artworkUrl) {
       this._artwork.style = "border-radius: 10px; background-color: #333333;";
+      if (this._bgFile) this._clearCardBackground();
     }
   }
 
@@ -820,17 +821,35 @@ export class SpotifyUI {
   }
 
   _loadArtworkFromUrl(url) {
-    const file = Gio.File.new_for_uri(url);
-    file.load_contents_async(null, (src, res) => {
-      try {
-        const [success, bytes] = src.load_contents_finish(res);
-        if (!success) throw new Error("Failed to load contents from URL");
-        this._setArtworkFromBytes(bytes);
-      } catch (e) {
-        logWarn("Failed to load artwork from URL");
-        this._setFallbackArtwork();
-      }
-    });
+    try {
+      const msg = Soup.Message.new("GET", url);
+      this._artworkSession.send_and_read_async(
+        msg,
+        GLib.PRIORITY_DEFAULT,
+        null,
+        (_session, result) => {
+          if (this._destroyed) return;
+          try {
+            const bytes = this._artworkSession.send_and_read_finish(result);
+            const status = msg.get_status();
+            if (status < 200 || status >= 300)
+              throw new Error(`HTTP ${status}`);
+
+            const data = bytes.get_data();
+            if (!data || data.length === 0)
+              throw new Error("Empty response body");
+
+            this._setArtworkFromBytes(data);
+          } catch (e) {
+            logWarn("Failed to load artwork from URL:", e.message || e, url);
+            this._setFallbackArtwork();
+          }
+        },
+      );
+    } catch (e) {
+      logWarn("Failed to start artwork download:", e.message || e);
+      this._setFallbackArtwork();
+    }
   }
 
   _setArtworkFromBytes(bytes) {
@@ -858,6 +877,7 @@ export class SpotifyUI {
             colorData.main,
             colorData.accent,
             colorData.theme,
+            colorData.backgroundUri,
           );
         }
       }
@@ -869,6 +889,7 @@ export class SpotifyUI {
 
   _setFallbackArtwork() {
     this._artwork.style = "border-radius: 10px; background-color: #333333;";
+    this._clearCardBackground();
   }
 
   _getColorPaletteFromBytes(bytes) {
@@ -878,8 +899,8 @@ export class SpotifyUI {
       );
       const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
         stream,
-        16,
-        16,
+        BLUR_SIZE,
+        BLUR_SIZE,
         true,
         null,
       );
@@ -888,6 +909,7 @@ export class SpotifyUI {
 
       const pixels = pixbuf.get_pixels();
       const hasAlpha = pixbuf.get_has_alpha();
+      const channels = pixbuf.get_n_channels();
       const rowstride = pixbuf.get_rowstride();
       const width = pixbuf.get_width();
       const height = pixbuf.get_height();
@@ -899,7 +921,7 @@ export class SpotifyUI {
 
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const offset = y * rowstride + x * (hasAlpha ? 4 : 3);
+          const offset = y * rowstride + x * channels;
           r += pixels[offset];
           g += pixels[offset + 1];
           b += pixels[offset + 2];
@@ -920,12 +942,153 @@ export class SpotifyUI {
           main: mainColor,
           accent: accentColor,
           theme: this._getThemeColor(mainColor, accentColor),
+          backgroundUri: this._createBlurredBackground(pixbuf),
         };
       }
     } catch (e) {
       logWarn("Failed to get color palette");
     }
     return null;
+  }
+
+  // Separable box blur over a packed RGB/RGBA buffer: one horizontal pass
+  // into dst plus one vertical pass back into src. _createBlurredBackground
+  // ping-pongs the two buffers BLUR_PASSES times to approximate a gaussian.
+  _boxBlurPass(src, dst, width, height, channels, radius, horizontal) {
+    const windowSize = radius * 2 + 1;
+    const outer = horizontal ? height : width;
+    const inner = horizontal ? width : height;
+    const strideOuter = horizontal ? width * channels : channels;
+    const strideInner = horizontal ? channels : width * channels;
+
+    for (let o = 0; o < outer; o++) {
+      const base = o * strideOuter;
+      for (let c = 0; c < channels; c++) {
+        let sum = 0;
+        for (let i = -radius; i <= radius; i++) {
+          const idx = Math.min(inner - 1, Math.max(0, i));
+          sum += src[base + idx * strideInner + c];
+        }
+        for (let i = 0; i < inner; i++) {
+          dst[base + i * strideInner + c] = sum / windowSize;
+          const out = Math.max(0, i - radius);
+          const inn = Math.min(inner - 1, i + radius + 1);
+          sum +=
+            src[base + inn * strideInner + c] -
+            src[base + out * strideInner + c];
+        }
+      }
+    }
+  }
+
+  _tuneColorChannel(value, average, brightness) {
+    const saturated = average + (value - average) * COLOR_SATURATION;
+    return Math.max(0, Math.min(255, Math.round(saturated * brightness)));
+  }
+
+  _createBlurredBackground(pixbuf) {
+    try {
+      const width = pixbuf.get_width();
+      const height = pixbuf.get_height();
+      const channels = pixbuf.get_n_channels();
+      const hasAlpha = pixbuf.get_has_alpha();
+      const rowstride = pixbuf.get_rowstride();
+      const pixels = pixbuf.get_pixels();
+
+      // Copy into a tightly packed buffer (rowstride can carry padding).
+      const data = new Uint8Array(width * height * channels);
+      for (let y = 0; y < height; y++) {
+        const srcRow = y * rowstride;
+        const dstRow = y * width * channels;
+        for (let x = 0; x < width * channels; x++) {
+          data[dstRow + x] = pixels[srcRow + x];
+        }
+      }
+
+      // A real blur rather than a pixelated upscale of a tiny thumbnail.
+      const tmp = new Uint8Array(data.length);
+      for (let pass = 0; pass < BLUR_PASSES; pass++) {
+        this._boxBlurPass(
+          data,
+          tmp,
+          width,
+          height,
+          channels,
+          BLUR_RADIUS,
+          true,
+        );
+        this._boxBlurPass(
+          tmp,
+          data,
+          width,
+          height,
+          channels,
+          BLUR_RADIUS,
+          false,
+        );
+      }
+
+      // Keep the album colors loud: saturation boost plus a gentle vertical
+      // brightness ramp (brighter up top, darker where the controls sit).
+      for (let y = 0; y < height; y++) {
+        const t = height > 1 ? y / (height - 1) : 0;
+        const brightness =
+          BACKGROUND_BRIGHTNESS_TOP +
+          (BACKGROUND_BRIGHTNESS_BOTTOM - BACKGROUND_BRIGHTNESS_TOP) * t;
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * channels;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const avg = (r + g + b) / 3;
+          data[i] = this._tuneColorChannel(r, avg, brightness);
+          data[i + 1] = this._tuneColorChannel(g, avg, brightness);
+          data[i + 2] = this._tuneColorChannel(b, avg, brightness);
+        }
+      }
+
+      const background = GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(data),
+        pixbuf.get_colorspace(),
+        hasAlpha,
+        8,
+        width,
+        height,
+        width * channels,
+      );
+
+      const file = Gio.File.new_for_path(
+        GLib.build_filenamev([
+          GLib.get_tmp_dir(),
+          `gnome-spotify-bg-${this._bgSequence++}.png`,
+        ]),
+      );
+      background.savev(file.get_path(), "png", [], []);
+
+      this._deleteBackgroundFile();
+      this._bgFile = file;
+
+      return file.get_uri();
+    } catch (e) {
+      logWarn("Failed to create blurred artwork background:", e.message || e);
+      return null;
+    }
+  }
+
+  _clearCardBackground() {
+    this.container.style = "";
+    this._currentColors = null;
+    this._deleteBackgroundFile();
+  }
+
+  _deleteBackgroundFile() {
+    if (!this._bgFile) return;
+    try {
+      this._bgFile.delete(null);
+    } catch (e) {
+      logWarn("Failed to remove blurred artwork background");
+    }
+    this._bgFile = null;
   }
 
   _getAccentColor(color) {
@@ -946,68 +1109,84 @@ export class SpotifyUI {
     };
   }
 
-  _applyArtworkColor(dominantColor, accentColor, themeColor) {
-    const dominantCssColor = `rgb(${dominantColor.r}, ${dominantColor.g}, ${dominantColor.b})`;
-    const accentCssColor = `rgb(${accentColor.r}, ${accentColor.g}, ${accentColor.b})`;
-    const themeCssColor = `rgb(${themeColor.r}, ${themeColor.g}, ${themeColor.b})`;
-    const readableTextColor = this._getReadableTextColor(dominantColor);
+  _applyArtworkColor(
+    dominantColor,
+    _accentColor,
+    _themeColor,
+    backgroundUri = null,
+  ) {
+    const rgb = (color) => `rgb(${color.r}, ${color.g}, ${color.b})`;
+    let style;
 
-    this.container.style = `background-color: ${dominantCssColor};`;
-    this._progressFilled.style = `background-color: ${accentCssColor};`;
-
-    this._progressBarContainer.style += ` background-color: ${themeCssColor};`;
-
-    this._readableTextColor = readableTextColor;
-
-    this._prevButton.style = `color: ${readableTextColor};`;
-    this._nextButton.style = `color: ${readableTextColor};`;
-    this._shuffleButton.style = `color: ${readableTextColor};`;
-    this._settingsButton.style = `color: ${readableTextColor};`;
-    this._downloadButton.style = `color: ${readableTextColor};`;
-    this._spotifyToggleButton.style = `color: ${readableTextColor};`;
-    this._likeButton.style = `color: ${readableTextColor};`;
-    this._closeButton.style = `color: ${readableTextColor};`;
-
-    this._titleLabel.style = `color: ${readableTextColor};`;
-    this._artistLabel.style = `color: ${readableTextColor};`;
-    this._overlayIcon.style = `color: ${readableTextColor};`;
-
-    if (this._onColorUpdate) {
-      this._onColorUpdate(dominantColor);
+    if (backgroundUri) {
+      // Blurred cover at (almost) full strength with a transparent→dark
+      // gradient scrim painted over it for text legibility — like Spotify's
+      // own now-playing backdrop. The inline gradient also replaces the
+      // opaque one from stylesheet.css, which would otherwise fully cover
+      // the image (St paints the gradient above the background image).
+      style = `background-image: url("${backgroundUri}"); background-size: cover;
+        background-gradient-direction: vertical;
+        background-gradient-start: rgba(0, 0, 0, ${SCRIM_ALPHA_TOP});
+        background-gradient-end: rgba(0, 0, 0, ${SCRIM_ALPHA_BOTTOM});`;
+    } else {
+      // Fallback when the blurred image could not be built: a gradient
+      // tinted with the dominant album color.
+      const top = Object.fromEntries(
+        Object.entries(dominantColor).map(([channel, value]) => [
+          channel,
+          Math.round(value * 0.62 + 8),
+        ]),
+      );
+      const bottom = Object.fromEntries(
+        Object.entries(top).map(([channel, value]) => [
+          channel,
+          Math.round(value * 0.55),
+        ]),
+      );
+      style = `background-gradient-direction: vertical;
+        background-gradient-start: ${rgb(top)};
+        background-gradient-end: ${rgb(bottom)};`;
     }
+
+    this.container.style = style;
+    this._readableTextColor = "#FFFFFF";
+    this._progressFilled.style = "background-color: #FFFFFF;";
+
+    const menuTint = {
+      r: Math.round(dominantColor.r * MENU_TINT_FACTOR),
+      g: Math.round(dominantColor.g * MENU_TINT_FACTOR),
+      b: Math.round(dominantColor.b * MENU_TINT_FACTOR),
+    };
+    if (this._onColorUpdate) this._onColorUpdate(menuTint);
   }
 
-  _getReadableTextColor(bgColor) {
-    const lum = (c) => (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
-    return lum(bgColor) < 0.5 ? "#FFFFFF" : "#000000";
+  _getCardWidth() {
+    return this.useFixedWidth
+      ? Math.max(320, Math.min(600, this.fixedWidth))
+      : 360;
   }
 
   _onWidthSettingsChanged() {
     this.useFixedWidth = this._settings.get_boolean("use-fixed-width");
     this.fixedWidth = this._settings.get_int("ui-width");
-
-    if (this.useFixedWidth) {
-      this.container.width = this.fixedWidth;
-      this.container.x_expand = false;
-    } else {
-      this.container.width = -1;
-      this.container.x_expand = true;
-    }
-
-    if (this.useFixedWidth) {
-      const infoBoxWidth = this.fixedWidth - 64 - 32 - 40;
-      this._infoBox.width = infoBoxWidth;
-      this._infoBox.x_expand = false;
-    } else {
-      this._infoBox.width = -1;
-      this._infoBox.x_expand = true;
-    }
-
+    this.container.width = this._getCardWidth();
+    this._infoBox.width = this._getCardWidth() - 96 - 18 - 36;
     this._updateProgressBar();
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
     this._stopProgressUpdate();
+    this._deleteBackgroundFile();
+    if (this._artworkSession) {
+      this._artworkSession.abort();
+      this._artworkSession = null;
+    }
+    if (this._progressWidthChangedId) {
+      this._progressBarContainer.disconnect(this._progressWidthChangedId);
+      this._progressWidthChangedId = null;
+    }
 
     if (this._infoBoxClickId) {
       this._infoBox.disconnect(this._infoBoxClickId);

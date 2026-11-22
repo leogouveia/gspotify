@@ -3,7 +3,10 @@ import St from "gi://St";
 import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import Gio from "gi://Gio";
+import Pango from "gi://Pango";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
+import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
+import { INFO_TIPS } from "./constants.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as Config from "resource:///org/gnome/shell/misc/config.js";
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
@@ -11,7 +14,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import { SpotifyDBus } from "./dbus-parser.js";
 import { SpotifyUI } from "./spotui.js";
 import { SpotDLExecutor } from "./spotdl.js";
-import { getStatusSymbol, toggleSpotifyWindow } from "./utils.js";
+import { toggleSpotifyWindow } from "./utils.js";
 import { logInfo, logWarn, logError } from "./utils.js";
 import { destroyStatsManager } from "./stats.js";
 import { cleanupSpotify, isSpotifyLoggedIn } from "./spotify-helper.js";
@@ -39,8 +42,16 @@ const SpotifyIndicator = GObject.registerClass(
         text: "Spotify",
         y_align: Clutter.ActorAlign.CENTER,
       });
+      this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+      this._label.clutter_text.line_wrap = false;
       this.add_child(this._label);
       this.menu.box.add_child(this._ui.container);
+      this.menu.connect("open-state-changed", (_menu, isOpen) => {
+        // The popup follows this indicator's allocation. Hold its label width
+        // while open so track/volume updates cannot move the menu under the pointer.
+        this._label.set_width(isOpen ? this._label.width : -1);
+        if (isOpen) this._extension.showQuickTips();
+      });
 
       this._dbus = new SpotifyDBus(this);
 
@@ -142,7 +153,6 @@ const SpotifyIndicator = GObject.registerClass(
             ? displayText.substring(0, labelLength - 3) + "..."
             : displayText;
 
-        this._ui._checkSpotifyConnection();
         this._ui.update(metadata);
       } else {
         this._label.text = "Spotify";
@@ -295,6 +305,8 @@ export default class SpotifyExtension extends Extension {
 
   disable() {
     this._clearMinimizeTimeout();
+    this._notificationSource?.destroy();
+    this._notificationSource = null;
 
     if (this._settingsHandlerId) {
       this._settings.disconnect(this._settingsHandlerId);
@@ -505,60 +517,44 @@ export default class SpotifyExtension extends Extension {
   }
 
   downloadTrack() {
-    const metadata = this._indicator._dbus.getMetadata();
-    const displayText =
-      metadata.title.length > 40
-        ? metadata.title.substring(0, 37) + "..."
-        : metadata.title;
-    this._indicator._label.text = `${displayText} ⦿`;
-    this._indicator._spotdl.checkSpotDLInstalled((installed) => {
-      if (!installed) {
-        logInfo("SpotDL is not installed");
-        this.sendOSDMessage("SpotDL is not installed", "dialog-error-symbolic");
-        this._indicator._label.text = "SpotDL is not installed";
-        return;
-      }
-    });
-
-    const rawFolder = this._settings.get_string("download-folder");
-    let output_folder;
-
-    if (GLib.path_is_absolute(rawFolder)) {
-      output_folder = rawFolder;
-    } else if (rawFolder.startsWith("~/")) {
-      output_folder = GLib.build_filenamev([
-        GLib.get_home_dir(),
-        rawFolder.slice(2),
-      ]);
-    } else {
-      output_folder = GLib.build_filenamev([GLib.get_home_dir(), rawFolder]);
+    if (this._downloadInProgress) return;
+    const executor = this._indicator?._spotdl;
+    const metadata = this._indicator?._dbus?.getMetadata();
+    if (!executor || !metadata?.url) {
+      this.sendNotification("Unable to download", "No track is available to download.",
+        "dialog-warning-symbolic");
+      return;
+    }
+    if (!executor.executablePath) {
+      this.sendNotification("SpotDL not found",
+        "Install SpotDL or check its executable location in preferences.",
+        "dialog-error-symbolic");
+      return;
     }
 
-    this._indicator._spotdl.downloadSong(
-      {
-        url: metadata.url,
-        output: output_folder,
-      },
-      (output) => {
-        this._indicator._label.text = `${displayText} ${getStatusSymbol(output.message)}`;
-      },
+    const rawFolder = this._settings.get_string("download-folder");
+    const output = GLib.path_is_absolute(rawFolder)
+      ? rawFolder
+      : GLib.build_filenamev([GLib.get_home_dir(),
+        rawFolder.startsWith("~/") ? rawFolder.slice(2) : rawFolder]);
+    const title = metadata.title || "Spotify track";
+    this._downloadInProgress = true;
+    this.sendNotification("Download started", title, "folder-download-symbolic");
+    executor.downloadSong({ url: metadata.url, output },
+      (line) => logInfo(`SpotDL ${line.type}: ${line.message}`),
       (result) => {
+        this._downloadInProgress = false;
+        if (!this._settings) return; // The extension may have been disabled.
         if (result.success) {
-          this._indicator._label.text = `${displayText} ✓`;
-          this.sendOSDMessage(
-            "Track downloaded successfully",
-            "dialog-information-symbolic",
-          );
+          this.sendNotification("Download complete", `${title}\nSaved to ${output}`,
+            "folder-download-symbolic");
         } else {
-          logWarn(`Download failed: ${result.error || result.exitCode}`);
-          this.sendOSDMessage(
-            "Download failed, Check SpotDL logs for details",
-            "dialog-warning-symbolic",
-          );
-          this._indicator._label.text = `${displayText} ✕`;
+          const reason = result.error || `SpotDL exited with code ${result.exitCode}`;
+          logWarn(`Download failed: ${reason}`);
+          this.sendNotification("Download failed", `${title}\n${reason}`,
+            "dialog-warning-symbolic");
         }
-      },
-    );
+      });
   }
 
   scheduleSpotifyMinimize() {
@@ -574,6 +570,34 @@ export default class SpotifyExtension extends Extension {
       }
       return GLib.SOURCE_CONTINUE;
     });
+  }
+
+  sendNotification(title, body, iconName = "multimedia-player-symbolic", action = null) {
+    if (!this._settings) return null;
+    if (!this._notificationSource) {
+      this._notificationSource = new MessageTray.Source({
+        title: "GSpotify",
+        iconName: "multimedia-player-symbolic",
+      });
+      this._notificationSource.connect("destroy", () => {
+        this._notificationSource = null;
+      });
+      Main.messageTray.add(this._notificationSource);
+    }
+    const notification = new MessageTray.Notification({
+      source: this._notificationSource, title, body, gicon: new Gio.ThemedIcon({ name: iconName }),
+    });
+    if (action) notification.addAction(action.label, action.callback);
+    this._notificationSource.addNotification(notification);
+    return notification;
+  }
+
+  showQuickTips() {
+    if (!this._settings.get_boolean("show-info-tip")) return;
+    this.sendNotification("GSpotify — quick tips", INFO_TIPS.join("\n"),
+      "multimedia-player-symbolic",
+      { label: "Open preferences", callback: () => this.openPreferences() });
+    this._settings.set_boolean("show-info-tip", false);
   }
 
   sendOSDMessage(message, iconName) {
