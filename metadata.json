@@ -1,5 +1,5 @@
 {
-  "uuid": "gspotify-lab@leogouveia.github.io",
+  "uuid": "gspotify-lab@leogouveia.com",
   "name": "GSpotify Lab",
   "description": "An experimental fork of GSpotify with a redesigned player and personal improvements. Uses spotdl for downloads. Independently distributed; not affiliated with Spotify.",
   "shell-version": [

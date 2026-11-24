@@ -91,7 +91,7 @@ continuar corretos. Preserve o arquivo LICENSE e os créditos do projeto origina
 
 ## Identidade independente do Lab
 
-O Lab usa o UUID `gspotify-lab@leogouveia.github.io`, nome visível **GSpotify Lab**
+O Lab usa o UUID `gspotify-lab@leogouveia.com`, nome visível **GSpotify Lab**
 e schema `org.gnome.shell.extensions.gspotify-lab`, no caminho
 `/org/gnome/shell/extensions/gspotify-lab/`. Estatísticas, entradas do Secret
 Service, classes CSS, tipos GObject e arquivos temporários têm nomes próprios
@@ -107,3 +107,23 @@ Antes da primeira Release com essa identidade, confira a instalação lado a lad
 em uma sessão gráfica: nomes na lista de extensões, ativação, preferências,
 estilos e desativação de cada extensão sem afetar a outra. Os testes isolados de
 configurações não substituem essa verificação.
+
+## Troca do UUID do Lab
+
+O UUID anterior era `gspotify-lab@leogouveia.github.io`. O GNOME considera o novo
+UUID uma extensão diferente, portanto instalar o pacote novo não substitui a
+pasta da instalação anterior.
+
+Antes de instalar o novo pacote, desative a identidade antiga:
+
+```bash
+gnome-extensions disable gspotify-lab@leogouveia.github.io
+```
+
+Após instalar, saia e entre novamente na sessão e ative somente
+`gspotify-lab@leogouveia.com`. As duas identidades do Lab não devem ficar ativas
+ao mesmo tempo: compartilham o schema, as credenciais, as estatísticas e os tipos
+GObject. Esses identificadores de armazenamento foram preservados para manter
+compatibilidade com os dados existentes do Lab; a porta padrão continua 9001.
+
+Depois de validar a nova instalação, a identidade antiga pode ser desinstalada.

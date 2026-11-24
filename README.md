@@ -64,14 +64,17 @@ Quando a primeira Release estiver publicada:
 5. Ative e abra as preferências:
 
    ```bash
-   gnome-extensions enable gspotify-lab@leogouveia.github.io
-   gnome-extensions prefs gspotify-lab@leogouveia.github.io
+   gnome-extensions enable gspotify-lab@leogouveia.com
+   gnome-extensions prefs gspotify-lab@leogouveia.com
    ```
 
-**O Lab possui UUID próprio**: `gspotify-lab@leogouveia.github.io`.
+**O Lab possui UUID próprio**: `gspotify-lab@leogouveia.com`.
 Na lista de extensões, ele aparece como **GSpotify Lab**, separado do
 **GSpotify & Downloader** original. As duas extensões podem permanecer instaladas.
 O ZIP do Lab não substitui nem atualiza a extensão original.
+
+Se você instalou o Lab com o UUID antigo, consulte as
+[instruções de troca de UUID](docs/releases.md#troca-do-uuid-do-lab) antes de instalar.
 
 As configurações, credenciais e estatísticas são independentes:
 
@@ -101,7 +104,7 @@ a instalação e os dados do original permanecem separados.
 Para desativar sem apagar configurações:
 
 ```bash
-gnome-extensions disable gspotify-lab@leogouveia.github.io
+gnome-extensions disable gspotify-lab@leogouveia.com
 ```
 
 ## Empacotamento local
