@@ -4,3 +4,4 @@ resource.d.ts
 schemas/gschemas.compiled
 dist/
 __pycache__/
+/result
