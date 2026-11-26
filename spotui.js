@@ -9,6 +9,14 @@ import Soup from "gi://Soup";
 import { toggleSpotifyWindow, logWarn, logInfo } from "./utils.js";
 import { toggleLike, isTrackLiked } from "./spotify-helper.js";
 import { getValidAccessToken } from "./spotify-auth.js";
+import {
+  createImageContent,
+  decodeArtwork,
+  fitSize,
+  isCancelled,
+  resourceScale,
+  themeScale,
+} from "./artwork.js";
 
 // Look of the blurred album-art card background (easy to tweak):
 const BLUR_SIZE = 128; // source resolution before blurring (bigger = smoother)
@@ -20,6 +28,9 @@ const BACKGROUND_BRIGHTNESS_BOTTOM = 0.85; // darkening comes from the scrim
 const SCRIM_ALPHA_TOP = 0.15; // transparent→dark gradient painted OVER the
 const SCRIM_ALPHA_BOTTOM = 0.4; // cover so white text stays readable
 const MENU_TINT_FACTOR = 0.38; // dominant-color tint of the popup around card
+const ARTWORK_SIZE = 96; // actor units, matches .gspotify-lab-artwork
+const ARTWORK_RADIUS = 14; // CSS px, matches .gspotify-lab-artwork
+const CARD_RADIUS = 24; // CSS px, matches .gspotify-lab-card
 
 export class SpotifyUI {
   constructor(indicator, extension, onColorUpdate = null) {
@@ -30,8 +41,16 @@ export class SpotifyUI {
     this._currentColors = null;
     this._readableTextColor = null;
     this._currentArtworkUrl = null;
-    this._bgFile = null;
-    this._bgSequence = 0;
+    // Each artwork request gets a token; late results of older requests are
+    // dropped so fast track skips can never show a previous cover.
+    this._artworkToken = 0;
+    this._artworkCancellable = null;
+    this._artworkPixbuf = null;
+    this._showingFallbackArtwork = false;
+    // Blurred backdrop pixels (small) and the size they were last rendered at.
+    this._backdropSource = null;
+    this._backdropRenderedSize = null;
+    this._backdropIdleId = 0;
 
     // Remote artwork (new Spotify clients expose mpris:artUrl as https://
     // CDN links) is fetched with libsoup instead of Gio/gvfs, which is not
@@ -70,13 +89,41 @@ export class SpotifyUI {
   }
 
   _buildUI() {
-    this.container = new St.BoxLayout({
-      style_class: "gspotify-lab-card",
-      orientation: Clutter.Orientation.VERTICAL,
+    // The card sits on top of a backdrop actor that shows the blurred cover.
+    // Pixels go straight to St.ImageContent: CSS background-image would be
+    // decoded synchronously on the compositor thread (see artwork.js).
+    this.container = new St.Widget({
+      layout_manager: new Clutter.BinLayout(),
       width: this._getCardWidth(),
       x_expand: false,
       y_expand: false,
     });
+
+    this._backdrop = new St.Widget({
+      x_expand: true,
+      y_expand: true,
+      x_align: Clutter.ActorAlign.FILL,
+      y_align: Clutter.ActorAlign.FILL,
+    });
+    // Stays visible (empty content paints nothing) so it is always allocated.
+    this._backdrop.connect("notify::allocation", () =>
+      this._queueBackdropRender(),
+    );
+    this._backdrop.connect("resource-scale-changed", () => {
+      this._backdropRenderedSize = null;
+      this._queueBackdropRender();
+    });
+    this.container.add_child(this._backdrop);
+
+    this._card = new St.BoxLayout({
+      style_class: "gspotify-lab-card",
+      orientation: Clutter.Orientation.VERTICAL,
+      x_expand: true,
+      y_expand: true,
+      x_align: Clutter.ActorAlign.FILL,
+      y_align: Clutter.ActorAlign.FILL,
+    });
+    this.container.add_child(this._card);
 
     this.container.connect("destroy", () => this.destroy());
     this._buildHeader();
@@ -88,7 +135,7 @@ export class SpotifyUI {
       x_expand: true,
       y_expand: false,
     });
-    this.container.add_child(this._separator);
+    this._card.add_child(this._separator);
 
     this._buildAdditionalControls();
   }
@@ -104,15 +151,26 @@ export class SpotifyUI {
     this._buildArtworkSection();
     this._buildInfoSection();
 
-    this.container.add_child(this._headerBox);
+    this._card.add_child(this._headerBox);
   }
 
   _buildArtworkSection() {
     this._artwork = new St.Bin({
       style_class: "gspotify-lab-artwork",
-      width: 96,
-      height: 96,
+      width: ARTWORK_SIZE,
+      height: ARTWORK_SIZE,
     });
+    // The bin keeps the CSS placeholder/shadow; the cover is a child actor
+    // so it paints above the bin's own background.
+    this._artworkImage = new St.Widget({
+      width: ARTWORK_SIZE,
+      height: ARTWORK_SIZE,
+      visible: false,
+    });
+    this._artworkImage.connect("resource-scale-changed", () =>
+      this._renderArtworkImage(),
+    );
+    this._artwork.set_child(this._artworkImage);
     this._headerBox.add_child(this._artwork);
   }
 
@@ -137,7 +195,7 @@ export class SpotifyUI {
     this._playButton.connect("clicked", () => this._onPlayPause());
     this._playbackControls.add_child(this._playButton);
     this._buildNextButton();
-    this.container.add_child(this._playbackControls);
+    this._card.add_child(this._playbackControls);
   }
 
   _buildPrevButton() {
@@ -329,7 +387,7 @@ export class SpotifyUI {
     times.add_child(new St.Widget({ x_expand: true }));
     times.add_child(this._durationLabel);
     this._progressBox.add_child(times);
-    this.container.add_child(this._progressBox);
+    this._card.add_child(this._progressBox);
     this._progressWidthChangedId = this._progressBarContainer.connect(
       "notify::width",
       () => this._updateProgressBar(),
@@ -371,7 +429,7 @@ export class SpotifyUI {
       x_align: Clutter.ActorAlign.FILL,
     });
 
-    this.container.add_child(this._additionalControls);
+    this._card.add_child(this._additionalControls);
 
     this._controls = {
       shuffle: this._buildShuffleButton(),
@@ -795,128 +853,218 @@ export class SpotifyUI {
     ) {
       this._currentArtworkUrl = metadata.artworkUrl;
       this._loadArtwork(metadata.artworkUrl);
-    } else if (!metadata.artworkUrl) {
-      this._artwork.style = "border-radius: 10px; background-color: #333333;";
-      if (this._bgFile) this._clearCardBackground();
-    }
-  }
-
-  _loadArtwork(url) {
-    try {
-      if (url.startsWith("file://")) {
-        this._loadLocalArtwork(url);
-      } else if (url.startsWith("http://") || url.startsWith("https://")) {
-        this._loadArtworkFromUrl(url);
-      }
-    } catch (e) {
-      logWarn("Failed to load artwork");
+    } else if (!metadata.artworkUrl && !this._showingFallbackArtwork) {
+      // update() runs on every MPRIS signal; only act on the transition.
+      this._currentArtworkUrl = null;
+      this._cancelArtworkLoad();
       this._setFallbackArtwork();
     }
   }
 
-  _loadLocalArtwork(url) {
-    const file = Gio.File.new_for_uri(url);
-    file.load_contents_async(null, (src, res) => {
-      try {
-        const [success, bytes] = src.load_contents_finish(res);
-        if (!success) throw new Error("Failed to load file");
-        this._setArtworkFromBytes(bytes);
-      } catch (e) {
-        logWarn("Failed to load local artwork");
+  _cancelArtworkLoad() {
+    this._artworkToken++;
+    this._artworkCancellable?.cancel();
+    this._artworkCancellable = null;
+  }
+
+  _isStaleArtwork(token) {
+    return this._destroyed || token !== this._artworkToken;
+  }
+
+  // Fetch, decode and show artwork without blocking the compositor thread:
+  // network/file reads and decoding are asynchronous, and nothing is
+  // written to or deleted from disk.
+  _loadArtwork(url) {
+    this._cancelArtworkLoad();
+    const token = this._artworkToken;
+    const cancellable = new Gio.Cancellable();
+    this._artworkCancellable = cancellable;
+
+    this._fetchArtwork(url, cancellable)
+      .then((bytes) =>
+        this._isStaleArtwork(token) ? null : decodeArtwork(bytes, cancellable),
+      )
+      .then((pixbuf) => {
+        if (!pixbuf || this._isStaleArtwork(token)) return;
+        this._artworkCancellable = null;
+        this._showArtwork(pixbuf);
+      })
+      .catch((e) => {
+        if (isCancelled(e) || this._isStaleArtwork(token)) return;
+        logWarn("Failed to load artwork:", e.message || e, url);
         this._setFallbackArtwork();
-      }
+      });
+  }
+
+  _fetchArtwork(url, cancellable) {
+    if (url.startsWith("file://"))
+      return this._fetchLocalArtwork(url, cancellable);
+    if (url.startsWith("http://") || url.startsWith("https://"))
+      return this._fetchRemoteArtwork(url, cancellable);
+    return Promise.reject(new Error("Unsupported artwork URL scheme"));
+  }
+
+  _fetchLocalArtwork(url, cancellable) {
+    return new Promise((resolve, reject) => {
+      Gio.File.new_for_uri(url).load_bytes_async(cancellable, (file, res) => {
+        try {
+          const [bytes] = file.load_bytes_finish(res);
+          resolve(bytes);
+        } catch (e) {
+          reject(e);
+        }
+      });
     });
   }
 
-  _loadArtworkFromUrl(url) {
-    try {
-      const msg = Soup.Message.new("GET", url);
-      this._artworkSession.send_and_read_async(
+  // Remote artwork (new Spotify clients expose mpris:artUrl as https:// CDN
+  // links) is fetched with libsoup instead of Gio/gvfs.
+  _fetchRemoteArtwork(url, cancellable) {
+    return new Promise((resolve, reject) => {
+      const session = this._artworkSession;
+      const msg = session ? Soup.Message.new("GET", url) : null;
+      if (!msg) {
+        reject(new Error("Cannot request artwork URL"));
+        return;
+      }
+      session.send_and_read_async(
         msg,
         GLib.PRIORITY_DEFAULT,
-        null,
+        cancellable,
         (_session, result) => {
-          if (this._destroyed) return;
           try {
-            const bytes = this._artworkSession.send_and_read_finish(result);
+            const bytes = session.send_and_read_finish(result);
             const status = msg.get_status();
             if (status < 200 || status >= 300)
               throw new Error(`HTTP ${status}`);
-
-            const data = bytes.get_data();
-            if (!data || data.length === 0)
+            if (!bytes || bytes.get_size() === 0)
               throw new Error("Empty response body");
-
-            this._setArtworkFromBytes(data);
+            resolve(bytes);
           } catch (e) {
-            logWarn("Failed to load artwork from URL:", e.message || e, url);
-            this._setFallbackArtwork();
+            reject(e);
           }
         },
       );
+    });
+  }
+
+  _showArtwork(pixbuf) {
+    this._artworkPixbuf = pixbuf;
+    this._showingFallbackArtwork = false;
+    this._artwork.style = null;
+    this._renderArtworkImage();
+
+    if (this._settings.get_boolean("artwork-themed-ui"))
+      this._applyArtworkTheme(pixbuf);
+    else this._clearCardBackground();
+  }
+
+  _renderArtworkImage() {
+    if (!this._artworkPixbuf || this._destroyed) return;
+    try {
+      const scale = resourceScale(this._artworkImage);
+      const size = Math.ceil(ARTWORK_SIZE * scale);
+      const radius = ARTWORK_RADIUS * themeScale() * scale;
+      this._artworkImage.content = createImageContent(
+        this._squareCrop(this._artworkPixbuf),
+        size,
+        size,
+        radius,
+      );
+      this._artworkImage.show();
     } catch (e) {
-      logWarn("Failed to start artwork download:", e.message || e);
+      logWarn("Failed to display artwork:", e.message || e);
       this._setFallbackArtwork();
     }
   }
 
-  _setArtworkFromBytes(bytes) {
+  // Same framing as CSS `background-size: cover` on a square box.
+  _squareCrop(pixbuf) {
+    const width = pixbuf.get_width();
+    const height = pixbuf.get_height();
+    if (width === height) return pixbuf;
+    const side = Math.min(width, height);
+    return pixbuf.new_subpixbuf(
+      Math.floor((width - side) / 2),
+      Math.floor((height - side) / 2),
+      side,
+      side,
+    );
+  }
+
+  _applyArtworkTheme(pixbuf) {
+    const [width, height] = fitSize(
+      pixbuf.get_width(),
+      pixbuf.get_height(),
+      BLUR_SIZE,
+    );
+    const small = pixbuf.scale_simple(
+      width,
+      height,
+      GdkPixbuf.InterpType.BILINEAR,
+    );
+    const colorData = small ? this._getColorPalette(small) : null;
+    if (!colorData) {
+      this._clearCardBackground();
+      return;
+    }
+
+    this._currentColors = colorData;
+    this._backdropSource = this._createBlurredBackground(small);
+    this._backdropRenderedSize = null;
+    // Keep the previous backdrop until the new one is rendered (no flash).
+    if (!this._backdropSource) this._backdrop.content = null;
+    this._applyArtworkColor(
+      colorData.main,
+      colorData.accent,
+      colorData.theme,
+      this._backdropSource !== null,
+    );
+    this._queueBackdropRender();
+  }
+
+  // The backdrop is rendered at the card's real pixel size so the rounded
+  // corners stay crisp. Rendering is deferred to an idle callback because it
+  // is triggered from allocation changes.
+  _queueBackdropRender() {
+    if (this._backdropIdleId || this._destroyed || !this._backdropSource)
+      return;
+    this._backdropIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+      this._backdropIdleId = 0;
+      this._renderBackdrop();
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  _renderBackdrop() {
+    if (this._destroyed || !this._backdropSource) return;
+    const box = this._backdrop.get_allocation_box();
+    const scale = resourceScale(this._backdrop);
+    const width = Math.ceil(box.get_width() * scale);
+    const height = Math.ceil(box.get_height() * scale);
+    // Not allocated yet: notify::allocation queues another render.
+    if (width <= 0 || height <= 0) return;
+
+    const sizeKey = `${width}x${height}`;
+    if (this._backdropRenderedSize === sizeKey) return;
+
     try {
-      const tempDir = GLib.get_tmp_dir();
-      const tempFile = GLib.build_filenamev([
-        tempDir,
-        "gnome-gspotify-lab-artwork.jpg",
-      ]);
-
-      const file = Gio.File.new_for_path(tempFile);
-      const stream = file.replace(null, false, Gio.FileCreateFlags.NONE, null);
-
-      stream.write_bytes(GLib.Bytes.new(bytes), null);
-      stream.close(null);
-
-      const fileUri = file.get_uri();
-      this._artwork.style = `background-image: url("${fileUri}");`;
-
-      if (this._settings.get_boolean("artwork-themed-ui")) {
-        const colorData = this._getColorPaletteFromBytes(bytes);
-        if (colorData) {
-          this._currentColors = colorData;
-          this._applyArtworkColor(
-            colorData.main,
-            colorData.accent,
-            colorData.theme,
-            colorData.backgroundUri,
-          );
-        }
-      }
+      this._backdrop.content = createImageContent(
+        this._backdropSource,
+        width,
+        height,
+        CARD_RADIUS * themeScale() * scale,
+      );
+      this._backdropRenderedSize = sizeKey;
     } catch (e) {
-      logWarn("Failed to set artwork from bytes");
-      this._setFallbackArtwork();
+      logWarn("Failed to display artwork background:", e.message || e);
+      this._clearCardBackground();
     }
   }
 
-  _setFallbackArtwork() {
-    this._artwork.style = "border-radius: 10px; background-color: #333333;";
-    this._clearCardBackground();
-  }
-
-  _getColorPaletteFromBytes(bytes) {
+  _getColorPalette(pixbuf) {
     try {
-      const stream = Gio.MemoryInputStream.new_from_bytes(
-        GLib.Bytes.new(bytes),
-      );
-      const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
-        stream,
-        BLUR_SIZE,
-        BLUR_SIZE,
-        true,
-        null,
-      );
-
-      if (!pixbuf) return null;
-
       const pixels = pixbuf.get_pixels();
-      const hasAlpha = pixbuf.get_has_alpha();
       const channels = pixbuf.get_n_channels();
       const rowstride = pixbuf.get_rowstride();
       const width = pixbuf.get_width();
@@ -950,7 +1098,6 @@ export class SpotifyUI {
           main: mainColor,
           accent: accentColor,
           theme: this._getThemeColor(mainColor, accentColor),
-          backgroundUri: this._createBlurredBackground(pixbuf),
         };
       }
     } catch (e) {
@@ -1038,24 +1185,33 @@ export class SpotifyUI {
 
       // Keep the album colors loud: saturation boost plus a gentle vertical
       // brightness ramp (brighter up top, darker where the controls sit).
+      // The transparent→dark scrim that keeps white text readable is baked
+      // in too (it used to be a CSS gradient painted over the image).
       for (let y = 0; y < height; y++) {
         const t = height > 1 ? y / (height - 1) : 0;
         const brightness =
           BACKGROUND_BRIGHTNESS_TOP +
           (BACKGROUND_BRIGHTNESS_BOTTOM - BACKGROUND_BRIGHTNESS_TOP) * t;
+        const scrim =
+          1 - (SCRIM_ALPHA_TOP + (SCRIM_ALPHA_BOTTOM - SCRIM_ALPHA_TOP) * t);
         for (let x = 0; x < width; x++) {
           const i = (y * width + x) * channels;
           const r = data[i];
           const g = data[i + 1];
           const b = data[i + 2];
           const avg = (r + g + b) / 3;
-          data[i] = this._tuneColorChannel(r, avg, brightness);
-          data[i + 1] = this._tuneColorChannel(g, avg, brightness);
-          data[i + 2] = this._tuneColorChannel(b, avg, brightness);
+          data[i] = Math.round(this._tuneColorChannel(r, avg, brightness) * scrim);
+          data[i + 1] = Math.round(
+            this._tuneColorChannel(g, avg, brightness) * scrim,
+          );
+          data[i + 2] = Math.round(
+            this._tuneColorChannel(b, avg, brightness) * scrim,
+          );
         }
       }
 
-      const background = GdkPixbuf.Pixbuf.new_from_bytes(
+      // In-memory only: no PNG is written, so there is nothing to delete.
+      return GdkPixbuf.Pixbuf.new_from_bytes(
         GLib.Bytes.new(data),
         pixbuf.get_colorspace(),
         hasAlpha,
@@ -1064,39 +1220,27 @@ export class SpotifyUI {
         height,
         width * channels,
       );
-
-      const file = Gio.File.new_for_path(
-        GLib.build_filenamev([
-          GLib.get_tmp_dir(),
-          `gnome-gspotify-lab-bg-${this._bgSequence++}.png`,
-        ]),
-      );
-      background.savev(file.get_path(), "png", [], []);
-
-      this._deleteBackgroundFile();
-      this._bgFile = file;
-
-      return file.get_uri();
     } catch (e) {
       logWarn("Failed to create blurred artwork background:", e.message || e);
       return null;
     }
   }
 
-  _clearCardBackground() {
-    this.container.style = "";
-    this._currentColors = null;
-    this._deleteBackgroundFile();
+  _setFallbackArtwork() {
+    this._showingFallbackArtwork = true;
+    this._artworkPixbuf = null;
+    this._artworkImage.content = null;
+    this._artworkImage.hide();
+    this._artwork.style = "border-radius: 10px; background-color: #333333;";
+    this._clearCardBackground();
   }
 
-  _deleteBackgroundFile() {
-    if (!this._bgFile) return;
-    try {
-      this._bgFile.delete(null);
-    } catch (e) {
-      logWarn("Failed to remove blurred artwork background");
-    }
-    this._bgFile = null;
+  _clearCardBackground() {
+    this._card.style = "";
+    this._currentColors = null;
+    this._backdropSource = null;
+    this._backdropRenderedSize = null;
+    this._backdrop.content = null;
   }
 
   _getAccentColor(color) {
@@ -1121,21 +1265,18 @@ export class SpotifyUI {
     dominantColor,
     _accentColor,
     _themeColor,
-    backgroundUri = null,
+    hasBackdrop = false,
   ) {
     const rgb = (color) => `rgb(${color.r}, ${color.g}, ${color.b})`;
     let style;
 
-    if (backgroundUri) {
-      // Blurred cover at (almost) full strength with a transparent→dark
-      // gradient scrim painted over it for text legibility — like Spotify's
-      // own now-playing backdrop. The inline gradient also replaces the
-      // opaque one from stylesheet.css, which would otherwise fully cover
-      // the image (St paints the gradient above the background image).
-      style = `background-image: url("${backgroundUri}"); background-size: cover;
-        background-gradient-direction: vertical;
-        background-gradient-start: rgba(0, 0, 0, ${SCRIM_ALPHA_TOP});
-        background-gradient-end: rgba(0, 0, 0, ${SCRIM_ALPHA_BOTTOM});`;
+    if (hasBackdrop) {
+      // The blurred cover (scrim included) is painted by this._backdrop
+      // behind the card, like Spotify's own now-playing backdrop. The card's
+      // stylesheet gradient is made transparent so it does not cover it.
+      style = `background-color: transparent;
+        background-gradient-start: transparent;
+        background-gradient-end: transparent;`;
     } else {
       // Fallback when the blurred image could not be built: a gradient
       // tinted with the dominant album color.
@@ -1156,7 +1297,7 @@ export class SpotifyUI {
         background-gradient-end: ${rgb(bottom)};`;
     }
 
-    this.container.style = style;
+    this._card.style = style;
     this._readableTextColor = "#FFFFFF";
     this._progressFilled.style = "background-color: #FFFFFF;";
 
@@ -1187,7 +1328,13 @@ export class SpotifyUI {
     this._destroyed = true;
     this._likeRevision++;
     this._stopProgressUpdate();
-    this._deleteBackgroundFile();
+    this._cancelArtworkLoad();
+    if (this._backdropIdleId) {
+      GLib.Source.remove(this._backdropIdleId);
+      this._backdropIdleId = 0;
+    }
+    this._artworkPixbuf = null;
+    this._backdropSource = null;
     if (this._artworkSession) {
       this._artworkSession.abort();
       this._artworkSession = null;

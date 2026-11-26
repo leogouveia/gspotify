@@ -13,6 +13,6 @@
   "url": "https://github.com/leogouveia/gspotify",
   "settings-schema": "org.gnome.shell.extensions.gspotify-lab",
   "gettext-domain": "gspotify-lab",
-  "version": 24,
-  "version-name": "1.0.0"
+  "version": 25,
+  "version-name": "1.0.1"
 }
